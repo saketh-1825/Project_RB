@@ -1,0 +1,299 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Autonomous SRE Copilot — Dev Compose
+#
+#  PROFILES
+#  --------
+#  go        → Go backend dev. Real Go service + mock LangGraph + all infra.
+#  ai        → AI/LangGraph dev. Real LangGraph service + mock Go backend + infra.
+#  full      → Both real services. Run before a PR merge to verify integration.
+#
+#  USAGE
+#  -----
+#  Go dev:       ./scripts/dev-go.sh   (or: docker compose --profile go up)
+#  AI dev:       ./scripts/dev-ai.sh   (or: docker compose --profile ai up)
+#  Integration:  ./scripts/dev-full.sh (or: docker compose --profile full up)
+#
+#  FIRST TIME
+#  ----------
+#  cp .env.example .env   ← fill in your API keys
+#  docker compose --profile go up --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ──────────────────────────────────────────────────────────
+  #  SHARED INFRASTRUCTURE  (all profiles)
+  # ──────────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles: [go, ai, full]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sre_copilot
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d sre_copilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    profiles: [go, ai, full]
+
+  chroma:
+    image: chromadb/chroma:0.5.0
+    restart: unless-stopped
+    ports:
+      - "8001:8000"            # host:container — avoids clash with go-backend on 8080
+    environment:
+      CHROMA_SERVER_AUTH_CREDENTIALS: ${CHROMA_TOKEN}
+      CHROMA_SERVER_AUTH_CREDENTIALS_PROVIDER: chromadb.auth.token_authn.TokenConfigServerAuthCredentialsProvider
+      CHROMA_SERVER_AUTH_PROVIDER: chromadb.auth.token_authn.TokenAuthenticationServerProvider
+      IS_PERSISTENT: "TRUE"
+    volumes:
+      - chroma-data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: [go, ai, full]
+
+  # ──────────────────────────────────────────────────────────
+  #  GO BACKEND  (real service — profile: go, full)
+  # ──────────────────────────────────────────────────────────
+
+  go-backend:
+    build:
+      context: ./go_backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"            # REST + WebSocket
+      - "2345:2345"            # delve debugger
+    environment:
+      PORT: "8080"
+      ENV: development
+
+      REDIS_URL: redis://redis:6379
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/sre_copilot?sslmode=disable
+      CHROMA_URL: http://chroma:8000
+      CHROMA_TOKEN: ${CHROMA_TOKEN}
+
+      # In 'go' profile, point at mock. In 'full' profile, point at real service.
+      # The LANGGRAPH_URL env var is overridden per profile below.
+      LANGGRAPH_URL: ${LANGGRAPH_URL:-http://mock-langgraph:9000}
+
+      SRE_INTERNAL_TOKEN: ${SRE_INTERNAL_TOKEN}
+      PROMETHEUS_WEBHOOK_SECRET: ${PROMETHEUS_WEBHOOK_SECRET}
+      DATADOG_WEBHOOK_SECRET: ${DATADOG_WEBHOOK_SECRET}
+
+      LOG_LEVEL: debug
+    volumes:
+      - ./go_backend:/app         # live source mount for air hot-reload
+      - go-mod-cache:/go/pkg/mod  # cache go modules across rebuilds
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    profiles: [go, full]
+
+  # ──────────────────────────────────────────────────────────
+  #  LANGGRAPH SERVICE  (real service — profile: ai, full)
+  # ──────────────────────────────────────────────────────────
+
+  langgraph-service:
+    build:
+      context: ./langgraph_service
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      PORT: "9000"
+      ENV: development
+
+      # In 'ai' profile, points at mock Go backend. In 'full', real Go backend.
+      GO_BACKEND_URL: ${GO_BACKEND_URL:-http://mock-go-backend:8080}
+
+      REDIS_URL: redis://redis:6379
+      CHROMA_URL: http://chroma:8000
+      CHROMA_TOKEN: ${CHROMA_TOKEN}
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/sre_copilot?sslmode=disable
+
+      SRE_INTERNAL_TOKEN: ${SRE_INTERNAL_TOKEN}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+
+      LOG_LEVEL: debug
+      MAX_CONCURRENT_ANALYSES: "3"
+      ANALYSIS_TIMEOUT_SECONDS: "300"
+      HUMAN_INTERRUPT_TIMEOUT_SECONDS: "120"
+
+    volumes:
+      - ./langgraph_service:/app   # live source mount — uvicorn --reload picks it up
+    depends_on:
+      redis:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    profiles: [ai, full]
+
+  # ──────────────────────────────────────────────────────────
+  #  MOCK: Go Backend  (used by AI dev — profile: ai)
+  #  WireMock serves realistic responses from ./mocks/go-backend/
+  # ──────────────────────────────────────────────────────────
+
+  mock-go-backend:
+    image: wiremock/wiremock:3.3.1
+    restart: unless-stopped
+    ports:
+      - "8080:8080"              # same port as real go-backend so LangGraph env vars are identical
+    volumes:
+      - ./mocks/go-backend:/home/wiremock:ro
+    command:
+      - "--port=8080"
+      - "--verbose"
+      - "--global-response-templating"   # enables dynamic response templates
+      - "--disable-banner"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/__admin/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles: [ai]
+
+  # ──────────────────────────────────────────────────────────
+  #  MOCK: LangGraph Service  (used by Go dev — profile: go)
+  # ──────────────────────────────────────────────────────────
+
+  mock-langgraph:
+    image: wiremock/wiremock:3.3.1
+    restart: unless-stopped
+    ports:
+      - "9000:9000"              # same port as real langgraph-service
+    volumes:
+      - ./mocks/langgraph:/home/wiremock:ro
+    command:
+      - "--port=9000"
+      - "--verbose"
+      - "--global-response-templating"
+      - "--disable-banner"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/__admin/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles: [go]
+
+  # ──────────────────────────────────────────────────────────
+  #  MONITORING STACK  (profile: go, full)
+  #  Fires real Prometheus alerts at your Go webhook endpoint
+  # ──────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    profiles: [go, full]
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    depends_on:
+      - prometheus
+    profiles: [go, full]
+
+  # ──────────────────────────────────────────────────────────
+  #  LOG + METRIC SIMULATOR  (profile: go, full)
+  #  Generates realistic fake telemetry so Go dev has data to query immediately
+  # ──────────────────────────────────────────────────────────
+
+  simulator:
+    build:
+      context: ./mocks/simulator
+    restart: unless-stopped
+    environment:
+      GO_BACKEND_URL: http://go-backend:8080
+      SRE_INTERNAL_TOKEN: ${SRE_INTERNAL_TOKEN}
+      SERVICES: "payment-api,auth-service,order-service,notification-service,api-gateway"
+      LOG_RATE_PER_SECOND: "20"
+      ERROR_RATE: "0.04"          # 4% error rate baseline
+      SPIKE_INTERVAL_SECONDS: "120"  # inject a spike every 2 minutes for testing
+    depends_on:
+      go-backend:
+        condition: service_healthy
+    profiles: [go, full]
+
+  # ──────────────────────────────────────────────────────────
+  #  ADMINER  (all profiles — quick DB inspection)
+  # ──────────────────────────────────────────────────────────
+
+  adminer:
+    image: adminer:4.8.1
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    profiles: [go, ai, full]
+
+volumes:
+  redis-data:
+  postgres-data:
+  chroma-data:
+  prometheus-data:
+  go-mod-cache:

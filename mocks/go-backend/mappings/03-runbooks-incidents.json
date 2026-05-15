@@ -1,0 +1,264 @@
+{
+    "mappings": [
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/runbooks/search"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "runbooks": [
+                        {
+                            "runbook_id": "rb-001",
+                            "title": "PostgreSQL Connection Pool Exhaustion",
+                            "tags": [
+                                "database",
+                                "postgresql",
+                                "connection-pool",
+                                "payment-api"
+                            ],
+                            "services": [
+                                "payment-api",
+                                "order-service"
+                            ],
+                            "content": "## Symptoms\n- `db_pool_waiting_connections` metric spikes above 10\n- Service returns 503 errors\n- Logs show: `connection pool exhausted`\n\n## Root Cause\nMost commonly caused by:\n1. A slow query holding connections for too long\n2. A database primary failover that hasn't completed\n3. A recent deployment that increased connection demand\n\n## Resolution Steps\n1. Check `pg_stat_activity` for long-running queries: `SELECT pid, now() - query_start AS duration, query FROM pg_stat_activity WHERE state != 'idle' ORDER BY duration DESC;`\n2. Kill offending queries if safe: `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE duration > interval '30 seconds';`\n3. Increase `max_connections` in `postgresql.conf` if this is a recurring issue\n4. Scale the number of service replicas to spread load\n5. Roll back the last deployment if it coincided with the issue\n\n## Escalation\nPage the on-call DBA if the issue persists after 15 minutes.",
+                            "similarity_score": 0.96,
+                            "last_updated": "2026-01-15T08:00:00.000Z"
+                        },
+                        {
+                            "runbook_id": "rb-002",
+                            "title": "Cascading Failure: Upstream Service Timeout",
+                            "tags": [
+                                "cascading-failure",
+                                "timeout",
+                                "circuit-breaker"
+                            ],
+                            "services": [
+                                "api-gateway",
+                                "order-service",
+                                "payment-api"
+                            ],
+                            "content": "## Symptoms\n- Multiple services showing elevated error rates simultaneously\n- Traces show timeouts propagating from a single downstream service\n- Error messages contain `context deadline exceeded` or `upstream service unavailable`\n\n## Resolution Steps\n1. Identify the root service using distributed traces\n2. Check the health endpoint of each service in the call chain\n3. Enable circuit breaker on the failing downstream service\n4. Shed load at the edge (api-gateway) if needed\n\n## Prevention\nEnsure all synchronous inter-service calls have timeouts < 2s and circuit breakers configured.",
+                            "similarity_score": 0.82,
+                            "last_updated": "2026-02-10T10:00:00.000Z"
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/runbooks/rb-001"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "runbook_id": "rb-001",
+                    "title": "PostgreSQL Connection Pool Exhaustion",
+                    "tags": [
+                        "database",
+                        "postgresql",
+                        "connection-pool",
+                        "payment-api"
+                    ],
+                    "services": [
+                        "payment-api",
+                        "order-service"
+                    ],
+                    "content": "## Symptoms\n- `db_pool_waiting_connections` metric spikes above 10\n- Service returns 503 errors\n- Logs show: `connection pool exhausted`\n\n## Resolution Steps\n1. Check `pg_stat_activity` for long-running queries\n2. Kill offending queries if safe\n3. Increase `max_connections` in `postgresql.conf` if recurring\n4. Scale service replicas\n5. Roll back last deployment if it coincided with the issue",
+                    "similarity_score": null,
+                    "last_updated": "2026-01-15T08:00:00.000Z"
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/runbooks"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "runbooks": [
+                        {
+                            "runbook_id": "rb-001",
+                            "title": "PostgreSQL Connection Pool Exhaustion",
+                            "tags": [
+                                "database",
+                                "postgresql"
+                            ],
+                            "services": [
+                                "payment-api"
+                            ],
+                            "content": "...",
+                            "similarity_score": null,
+                            "last_updated": "2026-01-15T08:00:00.000Z"
+                        },
+                        {
+                            "runbook_id": "rb-002",
+                            "title": "Cascading Failure: Upstream Service Timeout",
+                            "tags": [
+                                "cascading-failure"
+                            ],
+                            "services": [
+                                "api-gateway"
+                            ],
+                            "content": "...",
+                            "similarity_score": null,
+                            "last_updated": "2026-02-10T10:00:00.000Z"
+                        }
+                    ],
+                    "pagination": {
+                        "page": 1,
+                        "page_size": 20,
+                        "total": 2,
+                        "next_cursor": null
+                    }
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/incidents"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "incidents": [
+                        {
+                            "incident_id": "inc-past-001",
+                            "title": "Payment API DB pool exhaustion (Jan 2026)",
+                            "severity": "critical",
+                            "status": "resolved",
+                            "affected_services": [
+                                "payment-api",
+                                "order-service"
+                            ],
+                            "opened_at": "2026-01-20T14:22:00.000Z",
+                            "resolved_at": "2026-01-20T14:55:00.000Z",
+                            "root_cause_summary": "PostgreSQL primary ran out of connection slots due to a slow migration query left running by a developer. Resolved by terminating the migration and increasing max_connections from 100 to 200."
+                        },
+                        {
+                            "incident_id": "inc-past-002",
+                            "title": "Auth service latency spike (Feb 2026)",
+                            "severity": "high",
+                            "status": "resolved",
+                            "affected_services": [
+                                "auth-service",
+                                "api-gateway"
+                            ],
+                            "opened_at": "2026-02-14T09:10:00.000Z",
+                            "resolved_at": "2026-02-14T09:40:00.000Z",
+                            "root_cause_summary": "Redis cache eviction under memory pressure caused auth token lookups to fall through to PostgreSQL, increasing latency by 20x. Resolved by increasing Redis memory limit."
+                        }
+                    ],
+                    "pagination": {
+                        "page": 1,
+                        "page_size": 20,
+                        "total": 2,
+                        "next_cursor": null
+                    }
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "url": "/api/v1/incidents"
+            },
+            "response": {
+                "status": 201,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "incident_id": "inc-{{randomValue type='UUID'}}",
+                    "title": "Incident opened by LangGraph agent",
+                    "status": "open",
+                    "opened_at": "{{now}}"
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/incidents/[^/]+"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "incident_id": "inc-mock-001",
+                    "title": "HighErrorRate on payment-api",
+                    "severity": "critical",
+                    "status": "open",
+                    "alert_id": "alert-001",
+                    "affected_services": [
+                        "payment-api",
+                        "order-service"
+                    ],
+                    "opened_at": "2026-03-29T10:05:00.000Z",
+                    "resolved_at": null,
+                    "report": null,
+                    "events": []
+                }
+            }
+        },
+        {            "request": {
+                "method": "PATCH",
+                "urlPathPattern": "/api/v1/incidents/[^/]+"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "incident_id": "inc-mock-001",
+                    "updated_at": "{{now}}"
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "urlPathPattern": "/api/v1/incidents/.*/events"
+            },
+            "response": {
+                "status": 201,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "finding_id": "finding-{{randomValue type='UUID'}}",
+                    "stored_at": "{{now}}"
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "urlPathPattern": "/api/v1/incidents/.*/report"
+            },
+            "response": {
+                "status": 201,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "report_id": "report-{{randomValue type='UUID'}}",
+                    "stored_at": "{{now}}"
+                }
+            }
+        }
+    ]
+}

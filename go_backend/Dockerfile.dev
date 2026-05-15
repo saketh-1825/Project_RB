@@ -1,0 +1,22 @@
+# go_backend/Dockerfile.dev
+# Uses 'air' for hot-reload — file changes in ./go_backend/ restart the server automatically.
+
+FROM golang:1.24-alpine
+
+RUN apk add --no-cache curl git
+
+# Install air (hot-reload)
+RUN go install github.com/air-verse/air@v1.61.5
+
+WORKDIR /app
+
+# Cache dependencies layer — copy go.mod first, tidy to generate/verify go.sum
+COPY go.mod ./
+RUN go mod download
+
+# air config
+COPY .air.toml .
+
+EXPOSE 8080 2345
+
+CMD ["air", "-c", ".air.toml"]

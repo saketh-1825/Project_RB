@@ -1,0 +1,259 @@
+{
+    "mappings": [
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/health"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "status": "ok",
+                    "active_analyses": 0,
+                    "queue_depth": 0
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "url": "/api/v1/analyses"
+            },
+            "response": {
+                "status": 202,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-mock-001",
+                    "status": "pending",
+                    "message": "Analysis queued (mock)"
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/analyses/analysis-mock-001"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-mock-001",
+                    "alert_id": "alert-001",
+                    "incident_id": "inc-mock-001",
+                    "status": "running",
+                    "current_agent": "log_query_agent",
+                    "progress": {
+                        "steps_completed": 2,
+                        "steps_total": 6,
+                        "current_step_description": "Querying logs for the last 10 minutes across affected services"
+                    },
+                    "findings_so_far": 1,
+                    "started_at": "2026-03-29T10:05:01.000Z",
+                    "completed_at": null,
+                    "report_id": null,
+                    "error": null
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/analyses/analysis-completed"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-completed",
+                    "alert_id": "alert-001",
+                    "incident_id": "inc-mock-001",
+                    "status": "completed",
+                    "current_agent": null,
+                    "progress": {
+                        "steps_completed": 6,
+                        "steps_total": 6,
+                        "current_step_description": "Analysis complete"
+                    },
+                    "findings_so_far": 4,
+                    "started_at": "2026-03-29T10:05:01.000Z",
+                    "completed_at": "2026-03-29T10:07:43.000Z",
+                    "report_id": "report-mock-001",
+                    "error": null
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/analyses/analysis-awaiting"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-awaiting",
+                    "alert_id": "alert-001",
+                    "incident_id": "inc-mock-001",
+                    "status": "awaiting_human",
+                    "current_agent": "supervisor",
+                    "progress": {
+                        "steps_completed": 4,
+                        "steps_total": 6,
+                        "current_step_description": "Awaiting human confirmation before proceeding with root cause assessment"
+                    },
+                    "findings_so_far": 3,
+                    "started_at": "2026-03-29T10:05:01.000Z",
+                    "completed_at": null,
+                    "report_id": null,
+                    "error": null
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/analyses/analysis-failed"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-failed",
+                    "alert_id": "alert-001",
+                    "incident_id": "inc-mock-001",
+                    "status": "failed",
+                    "current_agent": null,
+                    "progress": {
+                        "steps_completed": 2,
+                        "steps_total": 6,
+                        "current_step_description": ""
+                    },
+                    "findings_so_far": 1,
+                    "started_at": "2026-03-29T10:05:01.000Z",
+                    "completed_at": null,
+                    "report_id": null,
+                    "error": "LLM provider rate limit exceeded after 3 retries"
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/analyses"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analyses": [
+                        {
+                            "analysis_id": "analysis-mock-001",
+                            "alert_id": "alert-001",
+                            "status": "running",
+                            "started_at": "2026-03-29T10:05:01.000Z",
+                            "completed_at": null
+                        },
+                        {
+                            "analysis_id": "analysis-completed",
+                            "alert_id": "alert-002",
+                            "status": "completed",
+                            "started_at": "2026-03-29T09:01:00.000Z",
+                            "completed_at": "2026-03-29T09:04:22.000Z"
+                        },
+                        {
+                            "analysis_id": "analysis-failed",
+                            "alert_id": "alert-001",
+                            "status": "failed",
+                            "started_at": "2026-03-29T08:00:00.000Z",
+                            "completed_at": null
+                        }
+                    ],
+                    "pagination": {
+                        "page": 1,
+                        "page_size": 20,
+                        "total": 3,
+                        "next_cursor": null
+                    }
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "urlPathPattern": "/api/v1/analyses/.*/cancel"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-mock-001",
+                    "status": "cancelled"
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "url": "/api/v1/analyses/analysis-awaiting/interrupt"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "analysis_id": "analysis-awaiting",
+                    "status": "running",
+                    "message": "Interrupt accepted, analysis resumed (mock)"
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "urlPathPattern": "/api/v1/analyses/(?!analysis-awaiting).*/interrupt"
+            },
+            "response": {
+                "status": 409,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "error": {
+                        "code": "ANALYSIS_NOT_AWAITING_HUMAN",
+                        "message": "Analysis is not in awaiting_human state. Current state: running",
+                        "details": null,
+                        "request_id": "mock-req-409"
+                    }
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/analyses/(?!analysis-mock-001|analysis-completed|analysis-awaiting|analysis-failed).*"
+            },
+            "response": {
+                "status": 404,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "error": {
+                        "code": "ANALYSIS_NOT_FOUND",
+                        "message": "No analysis found with the given ID",
+                        "details": null,
+                        "request_id": "mock-req-404"
+                    }
+                }
+            }
+        }
+    ]
+}

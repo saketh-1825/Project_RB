@@ -1,0 +1,594 @@
+{
+    "mappings": [
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/metrics/catalog"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "metrics": [
+                        {
+                            "name": "http_request_duration_seconds_p99",
+                            "description": "99th percentile HTTP request latency",
+                            "labels": [
+                                "service",
+                                "method",
+                                "route",
+                                "status_code"
+                            ],
+                            "unit": "seconds"
+                        },
+                        {
+                            "name": "http_requests_total",
+                            "description": "Total HTTP requests",
+                            "labels": [
+                                "service",
+                                "method",
+                                "route",
+                                "status_code"
+                            ],
+                            "unit": "count"
+                        },
+                        {
+                            "name": "http_error_rate",
+                            "description": "HTTP 5xx error rate (0.0–1.0)",
+                            "labels": [
+                                "service"
+                            ],
+                            "unit": "ratio"
+                        },
+                        {
+                            "name": "process_cpu_usage",
+                            "description": "CPU usage 0.0–1.0",
+                            "labels": [
+                                "service",
+                                "host"
+                            ],
+                            "unit": "ratio"
+                        },
+                        {
+                            "name": "process_memory_bytes",
+                            "description": "Resident set size in bytes",
+                            "labels": [
+                                "service",
+                                "host"
+                            ],
+                            "unit": "bytes"
+                        },
+                        {
+                            "name": "db_pool_active_connections",
+                            "description": "Active DB connections in pool",
+                            "labels": [
+                                "service",
+                                "db_name"
+                            ],
+                            "unit": "count"
+                        },
+                        {
+                            "name": "db_pool_waiting_connections",
+                            "description": "Requests waiting for a DB connection",
+                            "labels": [
+                                "service",
+                                "db_name"
+                            ],
+                            "unit": "count"
+                        },
+                        {
+                            "name": "db_query_duration_seconds_p99",
+                            "description": "99th percentile DB query latency",
+                            "labels": [
+                                "service",
+                                "query_type"
+                            ],
+                            "unit": "seconds"
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/metrics/query",
+                "queryParameters": {
+                    "metric_name": {
+                        "equalTo": "http_error_rate"
+                    }
+                }
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "metric_name": "http_error_rate",
+                    "unit": "ratio",
+                    "data_points": [
+                        {
+                            "timestamp": "2026-03-29T09:55:00.000Z",
+                            "value": 0.02,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T09:56:00.000Z",
+                            "value": 0.03,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T09:57:00.000Z",
+                            "value": 0.02,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T09:58:00.000Z",
+                            "value": 0.04,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T09:59:00.000Z",
+                            "value": 0.03,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:00:00.000Z",
+                            "value": 0.21,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:01:00.000Z",
+                            "value": 0.58,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:02:00.000Z",
+                            "value": 0.79,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:03:00.000Z",
+                            "value": 0.82,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:04:00.000Z",
+                            "value": 0.85,
+                            "labels": {
+                                "service": "payment-api"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/metrics/query",
+                "queryParameters": {
+                    "metric_name": {
+                        "equalTo": "db_pool_waiting_connections"
+                    }
+                }
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "metric_name": "db_pool_waiting_connections",
+                    "unit": "count",
+                    "data_points": [
+                        {
+                            "timestamp": "2026-03-29T09:58:00.000Z",
+                            "value": 0,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T09:59:00.000Z",
+                            "value": 1,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:00:00.000Z",
+                            "value": 8,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:01:00.000Z",
+                            "value": 24,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:02:00.000Z",
+                            "value": 41,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:03:00.000Z",
+                            "value": 47,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:04:00.000Z",
+                            "value": 47,
+                            "labels": {
+                                "service": "payment-api",
+                                "db_name": "payments"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/metrics/query"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "metric_name": "generic_metric",
+                    "unit": "count",
+                    "data_points": [
+                        {
+                            "timestamp": "2026-03-29T10:00:00.000Z",
+                            "value": 1.0,
+                            "labels": {}
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:01:00.000Z",
+                            "value": 1.2,
+                            "labels": {}
+                        },
+                        {
+                            "timestamp": "2026-03-29T10:02:00.000Z",
+                            "value": 0.9,
+                            "labels": {}
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "POST",
+                "url": "/api/v1/metrics/query/batch"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "series": [
+                        {
+                            "metric_name": "http_error_rate",
+                            "unit": "ratio",
+                            "data_points": [
+                                {
+                                    "timestamp": "2026-03-29T10:00:00.000Z",
+                                    "value": 0.21,
+                                    "labels": {
+                                        "service": "payment-api"
+                                    }
+                                },
+                                {
+                                    "timestamp": "2026-03-29T10:04:00.000Z",
+                                    "value": 0.85,
+                                    "labels": {
+                                        "service": "payment-api"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "metric_name": "process_cpu_usage",
+                            "unit": "ratio",
+                            "data_points": [
+                                {
+                                    "timestamp": "2026-03-29T10:00:00.000Z",
+                                    "value": 0.32,
+                                    "labels": {
+                                        "service": "payment-api",
+                                        "host": "pod-xkp2q"
+                                    }
+                                },
+                                {
+                                    "timestamp": "2026-03-29T10:04:00.000Z",
+                                    "value": 0.35,
+                                    "labels": {
+                                        "service": "payment-api",
+                                        "host": "pod-xkp2q"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    "errors": []
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/metrics/summary"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "metric_name": "http_error_rate",
+                    "min": 0.02,
+                    "max": 0.85,
+                    "avg": 0.47,
+                    "p50": 0.58,
+                    "p95": 0.84,
+                    "p99": 0.85,
+                    "unit": "ratio"
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/traces/trace-abc123"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "trace_id": "trace-abc123",
+                    "root_service": "api-gateway",
+                    "total_duration_ms": 5123,
+                    "spans": [
+                        {
+                            "trace_id": "trace-abc123",
+                            "span_id": "span-000",
+                            "parent_span_id": null,
+                            "service": "api-gateway",
+                            "operation": "POST /v1/orders",
+                            "start_time": "2026-03-29T10:04:55.000Z",
+                            "duration_ms": 5123,
+                            "status": "error",
+                            "attributes": {
+                                "http.method": "POST",
+                                "http.status_code": 503
+                            },
+                            "error_message": "upstream service unavailable"
+                        },
+                        {
+                            "trace_id": "trace-abc123",
+                            "span_id": "span-001",
+                            "parent_span_id": "span-000",
+                            "service": "order-service",
+                            "operation": "createOrder",
+                            "start_time": "2026-03-29T10:04:55.050Z",
+                            "duration_ms": 5060,
+                            "status": "error",
+                            "attributes": {},
+                            "error_message": "payment charge failed"
+                        },
+                        {
+                            "trace_id": "trace-abc123",
+                            "span_id": "span-002",
+                            "parent_span_id": "span-001",
+                            "service": "payment-api",
+                            "operation": "POST /v1/charge",
+                            "start_time": "2026-03-29T10:04:55.100Z",
+                            "duration_ms": 5000,
+                            "status": "timeout",
+                            "attributes": {
+                                "payment.amount": 99.99,
+                                "payment.currency": "USD"
+                            },
+                            "error_message": "context deadline exceeded"
+                        },
+                        {
+                            "trace_id": "trace-abc123",
+                            "span_id": "span-003",
+                            "parent_span_id": "span-002",
+                            "service": "payment-api",
+                            "operation": "db.query SELECT payments",
+                            "start_time": "2026-03-29T10:04:55.110Z",
+                            "duration_ms": 4990,
+                            "status": "timeout",
+                            "attributes": {
+                                "db.system": "postgresql",
+                                "db.statement": "SELECT * FROM payment_methods WHERE user_id = $1"
+                            },
+                            "error_message": "connection pool exhausted"
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/traces"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "traces": [
+                        {
+                            "trace_id": "trace-abc123",
+                            "root_service": "api-gateway",
+                            "status": "error",
+                            "duration_ms": 5123,
+                            "started_at": "2026-03-29T10:04:55.000Z",
+                            "span_count": 4
+                        }
+                    ],
+                    "next_cursor": null
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "url": "/api/v1/services"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "generated_at": "2026-03-29T10:05:00.000Z",
+                    "services": [
+                        {
+                            "service_id": "svc-api-gateway",
+                            "name": "api-gateway",
+                            "health": "degraded",
+                            "version": "v3.2.1",
+                            "dependencies": [
+                                {
+                                    "service_id": "svc-order-service",
+                                    "call_type": "sync",
+                                    "avg_latency_ms": 5100,
+                                    "error_rate_percent": 45.0
+                                },
+                                {
+                                    "service_id": "svc-auth-service",
+                                    "call_type": "sync",
+                                    "avg_latency_ms": 12,
+                                    "error_rate_percent": 0.1
+                                }
+                            ],
+                            "tags": {
+                                "team": "platform",
+                                "tier": "edge"
+                            }
+                        },
+                        {
+                            "service_id": "svc-order-service",
+                            "name": "order-service",
+                            "health": "degraded",
+                            "version": "v1.8.0",
+                            "dependencies": [
+                                {
+                                    "service_id": "svc-payment-api",
+                                    "call_type": "sync",
+                                    "avg_latency_ms": 5050,
+                                    "error_rate_percent": 82.0
+                                },
+                                {
+                                    "service_id": "svc-notification-service",
+                                    "call_type": "async",
+                                    "avg_latency_ms": 5,
+                                    "error_rate_percent": 0.0
+                                }
+                            ],
+                            "tags": {
+                                "team": "commerce",
+                                "tier": "backend"
+                            }
+                        },
+                        {
+                            "service_id": "svc-payment-api",
+                            "name": "payment-api",
+                            "health": "down",
+                            "version": "v2.1.4",
+                            "dependencies": [],
+                            "tags": {
+                                "team": "payments",
+                                "tier": "backend"
+                            }
+                        },
+                        {
+                            "service_id": "svc-auth-service",
+                            "name": "auth-service",
+                            "health": "healthy",
+                            "version": "v4.0.2",
+                            "dependencies": [],
+                            "tags": {
+                                "team": "platform",
+                                "tier": "backend"
+                            }
+                        },
+                        {
+                            "service_id": "svc-notification-service",
+                            "name": "notification-service",
+                            "health": "healthy",
+                            "version": "v1.2.0",
+                            "dependencies": [],
+                            "tags": {
+                                "team": "commerce",
+                                "tier": "backend"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {            "request": {
+                "method": "GET",
+                "urlPathPattern": "/api/v1/services/.*/health"
+            },
+            "response": {
+                "status": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "jsonBody": {
+                    "service_id": "svc-payment-api",
+                    "health": "down",
+                    "error_rate_1m": 0.85,
+                    "p99_latency_ms": 5050,
+                    "active_instances": 3,
+                    "last_deploy": {
+                        "timestamp": "2026-03-29T09:45:00.000Z",
+                        "version": "v2.1.4",
+                        "deployed_by": "ci-pipeline"
+                    }
+                }
+            }
+        }
+    ]
+}
