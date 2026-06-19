@@ -1,0 +1,1056 @@
+{
+  "_meta": {
+    "contract_version": "1.0.0",
+    "project": "autonomous-sre-copilot",
+    "last_updated": "2026-03-29",
+    "authors": ["go-engineer", "ai-engineer"],
+    "rule": "Any change to this file requires sign-off from both engineers. Bump minor version for additive changes, major version for breaking changes.",
+    "channels": ["REST/HTTP", "WebSocket", "Webhook (inbound)"]
+  },
+
+  "_shared_types": {
+    "Severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "info"],
+      "description": "Unified severity scale used across alerts, incidents, and findings"
+    },
+    "AnalysisStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "awaiting_human",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "AgentName": {
+      "type": "string",
+      "enum": ["supervisor", "log_query_agent", "rag_agent", "correlation_agent", "report_agent"]
+    },
+    "ServiceHealth": {
+      "type": "string",
+      "enum": ["healthy", "degraded", "down", "unknown"]
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "ISO 8601 UTC",
+      "example": "2026-03-29T12:34:56.789Z"
+    },
+    "TimeRange": {
+      "type": "object",
+      "fields": {
+        "from": { "$ref": "Timestamp" },
+        "to": { "$ref": "Timestamp" }
+      },
+      "required": ["from", "to"]
+    },
+    "Pagination": {
+      "type": "object",
+      "fields": {
+        "page": { "type": "integer", "default": 1 },
+        "page_size": { "type": "integer", "default": 50, "max": 500 },
+        "total": { "type": "integer", "description": "Total matching records (response only)" },
+        "next_cursor": { "type": "string", "nullable": true, "description": "Cursor for keyset pagination on large log queries" }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "fields": {
+        "error": {
+          "code": { "type": "string", "description": "Machine-readable error code e.g. LOG_QUERY_TIMEOUT" },
+          "message": { "type": "string", "description": "Human-readable message" },
+          "details": { "type": "object", "nullable": true, "description": "Extra context (query that failed, field that was invalid, etc.)" },
+          "request_id": { "type": "string", "description": "Trace ID for correlation across services" }
+        }
+      }
+    },
+    "LogEntry": {
+      "type": "object",
+      "fields": {
+        "id": { "type": "string" },
+        "timestamp": { "$ref": "Timestamp" },
+        "level": { "type": "string", "enum": ["DEBUG", "INFO", "WARN", "ERROR", "FATAL"] },
+        "service": { "type": "string" },
+        "host": { "type": "string" },
+        "message": { "type": "string" },
+        "trace_id": { "type": "string", "nullable": true },
+        "span_id": { "type": "string", "nullable": true },
+        "attributes": { "type": "object", "description": "Arbitrary key-value pairs from structured logging" }
+      }
+    },
+    "MetricPoint": {
+      "type": "object",
+      "fields": {
+        "timestamp": { "$ref": "Timestamp" },
+        "value": { "type": "number" },
+        "labels": { "type": "object", "description": "Prometheus-style label set" }
+      }
+    },
+    "MetricSeries": {
+      "type": "object",
+      "fields": {
+        "metric_name": { "type": "string" },
+        "unit": { "type": "string", "example": "ms, %, bytes, req/s" },
+        "data_points": { "type": "array", "items": { "$ref": "MetricPoint" } }
+      }
+    },
+    "Span": {
+      "type": "object",
+      "fields": {
+        "trace_id": { "type": "string" },
+        "span_id": { "type": "string" },
+        "parent_span_id": { "type": "string", "nullable": true },
+        "service": { "type": "string" },
+        "operation": { "type": "string" },
+        "start_time": { "$ref": "Timestamp" },
+        "duration_ms": { "type": "number" },
+        "status": { "type": "string", "enum": ["ok", "error", "timeout"] },
+        "attributes": { "type": "object" },
+        "error_message": { "type": "string", "nullable": true }
+      }
+    },
+    "ServiceNode": {
+      "type": "object",
+      "fields": {
+        "service_id": { "type": "string" },
+        "name": { "type": "string" },
+        "health": { "$ref": "ServiceHealth" },
+        "version": { "type": "string" },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "service_id": { "type": "string" },
+            "call_type": { "type": "string", "enum": ["sync", "async", "db", "cache", "queue"] },
+            "avg_latency_ms": { "type": "number" },
+            "error_rate_percent": { "type": "number" }
+          }
+        },
+        "tags": { "type": "object" }
+      }
+    },
+    "Alert": {
+      "type": "object",
+      "fields": {
+        "alert_id": { "type": "string" },
+        "source": { "type": "string", "enum": ["prometheus", "datadog", "grafana", "custom_webhook"] },
+        "name": { "type": "string" },
+        "severity": { "$ref": "Severity" },
+        "status": { "type": "string", "enum": ["firing", "resolved", "suppressed"] },
+        "fired_at": { "$ref": "Timestamp" },
+        "resolved_at": { "$ref": "Timestamp", "nullable": true },
+        "labels": { "type": "object", "description": "Original labels from Prometheus/Datadog" },
+        "annotations": { "type": "object" },
+        "affected_services": { "type": "array", "items": { "type": "string" } },
+        "generator_url": { "type": "string", "nullable": true, "description": "Link back to Prometheus/Datadog graph" }
+      }
+    },
+    "Runbook": {
+      "type": "object",
+      "fields": {
+        "runbook_id": { "type": "string" },
+        "title": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "services": { "type": "array", "items": { "type": "string" } },
+        "content": { "type": "string", "description": "Full markdown text of the runbook" },
+        "similarity_score": { "type": "number", "nullable": true, "description": "Set on search results only (0.0 to 1.0)" },
+        "last_updated": { "$ref": "Timestamp" }
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "description": "A single insight produced by any LangGraph agent",
+      "fields": {
+        "finding_id": { "type": "string" },
+        "agent": { "$ref": "AgentName" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "error_spike",
+            "latency_spike",
+            "dependency_failure",
+            "config_change",
+            "resource_exhaustion",
+            "cascading_failure",
+            "log_anomaly",
+            "runbook_match",
+            "historical_correlation"
+          ]
+        },
+        "severity": { "$ref": "Severity" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "evidence": {
+          "type": "object",
+          "fields": {
+            "log_ids": { "type": "array", "items": { "type": "string" } },
+            "metric_names": { "type": "array", "items": { "type": "string" } },
+            "trace_ids": { "type": "array", "items": { "type": "string" } },
+            "time_range": { "$ref": "TimeRange" },
+            "raw_snippets": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "confidence": { "type": "number", "description": "0.0 to 1.0" },
+        "created_at": { "$ref": "Timestamp" }
+      }
+    },
+    "IncidentReport": {
+      "type": "object",
+      "fields": {
+        "report_id": { "type": "string" },
+        "incident_id": { "type": "string" },
+        "alert_id": { "type": "string" },
+        "generated_at": { "$ref": "Timestamp" },
+        "title": { "type": "string" },
+        "executive_summary": { "type": "string" },
+        "root_cause": {
+          "type": "object",
+          "fields": {
+            "description": { "type": "string" },
+            "affected_services": { "type": "array", "items": { "type": "string" } },
+            "confidence": { "type": "number" },
+            "supporting_findings": { "type": "array", "items": { "$ref": "Finding" } }
+          }
+        },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "timestamp": { "$ref": "Timestamp" },
+            "event": { "type": "string" },
+            "source": { "type": "string" }
+          }
+        },
+        "suggested_fixes": {
+          "type": "array",
+          "items": {
+            "priority": { "type": "integer", "description": "1 = highest" },
+            "action": { "type": "string" },
+            "rationale": { "type": "string" },
+            "runbook_reference": { "type": "string", "nullable": true },
+            "risk_level": { "type": "string", "enum": ["safe", "low", "medium", "high"] }
+          }
+        },
+        "similar_past_incidents": {
+          "type": "array",
+          "items": {
+            "incident_id": { "type": "string" },
+            "similarity_score": { "type": "number" },
+            "resolution": { "type": "string" }
+          }
+        },
+        "runbooks_consulted": { "type": "array", "items": { "$ref": "Runbook" } },
+        "model_metadata": {
+          "type": "object",
+          "fields": {
+            "total_tokens_used": { "type": "integer" },
+            "agents_invoked": { "type": "array", "items": { "$ref": "AgentName" } },
+            "analysis_duration_ms": { "type": "integer" }
+          }
+        }
+      }
+    }
+  },
+
+  "go_backend_api": {
+    "_description": "Endpoints exposed by the Go backend. LangGraph agents call these. Dashboard also consumes these.",
+    "base_url": "http://go-backend:8080/api/v1",
+    "auth": {
+      "method": "Bearer token (static shared secret for internal service-to-service)",
+      "header": "Authorization: Bearer <INTERNAL_SERVICE_TOKEN>",
+      "note": "Rotate via environment variable SRE_INTERNAL_TOKEN. Both services read from same secret store."
+    },
+
+    "alerts": {
+      "GET /alerts": {
+        "description": "List all alerts. Used by LangGraph supervisor on startup and by dashboard.",
+        "query_params": {
+          "status": { "type": "string", "enum": ["firing", "resolved", "suppressed"], "optional": true },
+          "severity": { "$ref": "Severity", "optional": true },
+          "service": { "type": "string", "optional": true },
+          "from": { "$ref": "Timestamp", "optional": true },
+          "to": { "$ref": "Timestamp", "optional": true },
+          "page": { "type": "integer", "default": 1 },
+          "page_size": { "type": "integer", "default": 50 }
+        },
+        "response_200": {
+          "alerts": { "type": "array", "items": { "$ref": "Alert" } },
+          "pagination": { "$ref": "Pagination" }
+        }
+      },
+      "GET /alerts/:alert_id": {
+        "description": "Fetch a single alert by ID. First call LangGraph makes when woken up by a webhook.",
+        "response_200": { "$ref": "Alert" },
+        "response_404": { "$ref": "ErrorResponse" }
+      },
+      "POST /alerts/:alert_id/acknowledge": {
+        "description": "Mark an alert as acknowledged. Called by dashboard (human action) or LangGraph when it takes ownership.",
+        "request_body": {
+          "acknowledged_by": { "type": "string", "description": "agent name or human username" },
+          "note": { "type": "string", "nullable": true }
+        },
+        "response_200": { "$ref": "Alert" }
+      },
+      "POST /alerts/:alert_id/suppress": {
+        "description": "Suppress a noisy alert for a duration. Human-initiated via dashboard.",
+        "request_body": {
+          "duration_minutes": { "type": "integer" },
+          "reason": { "type": "string" }
+        },
+        "response_200": { "$ref": "Alert" }
+      }
+    },
+
+    "logs": {
+      "GET /logs": {
+        "description": "Primary log query endpoint. The log_query_agent calls this to pull evidence for a time window.",
+        "query_params": {
+          "from": { "$ref": "Timestamp", "required": true },
+          "to": { "$ref": "Timestamp", "required": true },
+          "services": { "type": "string", "description": "Comma-separated service names", "optional": true },
+          "levels": { "type": "string", "description": "Comma-separated levels e.g. ERROR,FATAL", "optional": true },
+          "hosts": { "type": "string", "description": "Comma-separated hostnames", "optional": true },
+          "trace_id": { "type": "string", "optional": true, "description": "Pull all logs for one distributed trace" },
+          "search": { "type": "string", "optional": true, "description": "Full-text keyword search in message field" },
+          "regex": { "type": "string", "optional": true, "description": "Regex filter on message field. Go backend validates and rejects malformed patterns." },
+          "page_size": { "type": "integer", "default": 200, "max": 2000 },
+          "cursor": { "type": "string", "optional": true, "description": "Cursor from previous response for keyset pagination" },
+          "sort": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
+        },
+        "response_200": {
+          "logs": { "type": "array", "items": { "$ref": "LogEntry" } },
+          "total_matched": { "type": "integer" },
+          "next_cursor": { "type": "string", "nullable": true },
+          "query_duration_ms": { "type": "integer" }
+        },
+        "response_400": { "$ref": "ErrorResponse", "note": "Returned for invalid regex or missing required time range" },
+        "response_504": { "$ref": "ErrorResponse", "note": "Query timed out. LangGraph should retry with narrower time range." }
+      },
+      "GET /logs/anomalies": {
+        "description": "Pre-computed anomalous log clusters for a time range. Go backend runs a sliding window error-rate counter and returns the hot windows. Saves LangGraph from having to scan everything.",
+        "query_params": {
+          "from": { "$ref": "Timestamp", "required": true },
+          "to": { "$ref": "Timestamp", "required": true },
+          "services": { "type": "string", "optional": true },
+          "threshold_multiplier": { "type": "number", "default": 3.0, "description": "How many std-devs above baseline counts as anomalous" }
+        },
+        "response_200": {
+          "anomalous_windows": {
+            "type": "array",
+            "items": {
+              "window_start": { "$ref": "Timestamp" },
+              "window_end": { "$ref": "Timestamp" },
+              "service": { "type": "string" },
+              "error_rate": { "type": "number" },
+              "baseline_rate": { "type": "number" },
+              "spike_factor": { "type": "number" },
+              "sample_log_ids": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      },
+      "GET /logs/:log_id": {
+        "description": "Fetch a single log entry by ID. Used when a finding references a specific log_id.",
+        "response_200": { "$ref": "LogEntry" },
+        "response_404": { "$ref": "ErrorResponse" }
+      }
+    },
+
+    "metrics": {
+      "GET /metrics/query": {
+        "description": "Fetch a time series for a named metric. The correlation_agent calls this to cross-reference error spikes with resource metrics.",
+        "query_params": {
+          "metric_name": { "type": "string", "required": true, "example": "http_request_duration_seconds_p99" },
+          "from": { "$ref": "Timestamp", "required": true },
+          "to": { "$ref": "Timestamp", "required": true },
+          "labels": { "type": "string", "optional": true, "description": "JSON-encoded label filter e.g. {\"service\":\"payment-api\"}" },
+          "step": { "type": "string", "optional": true, "default": "30s", "description": "Resolution step for the series e.g. 15s, 1m, 5m" }
+        },
+        "response_200": { "$ref": "MetricSeries" }
+      },
+      "POST /metrics/query/batch": {
+        "description": "Fetch multiple metric series in one call. LangGraph uses this to avoid N round trips when building the incident timeline.",
+        "request_body": {
+          "queries": {
+            "type": "array",
+            "max_items": 20,
+            "items": {
+              "metric_name": { "type": "string" },
+              "from": { "$ref": "Timestamp" },
+              "to": { "$ref": "Timestamp" },
+              "labels": { "type": "object", "optional": true },
+              "step": { "type": "string", "optional": true }
+            }
+          }
+        },
+        "response_200": {
+          "series": { "type": "array", "items": { "$ref": "MetricSeries" } },
+          "errors": {
+            "type": "array",
+            "description": "Partial success supported. Each failed query is reported here without aborting the batch.",
+            "items": {
+              "metric_name": { "type": "string" },
+              "error": { "type": "string" }
+            }
+          }
+        }
+      },
+      "GET /metrics/summary": {
+        "description": "Single-value summary statistics for a metric in a time window (min, max, avg, p50, p95, p99). Used by report_agent when writing the executive summary.",
+        "query_params": {
+          "metric_name": { "type": "string", "required": true },
+          "from": { "$ref": "Timestamp", "required": true },
+          "to": { "$ref": "Timestamp", "required": true },
+          "labels": { "type": "string", "optional": true }
+        },
+        "response_200": {
+          "metric_name": { "type": "string" },
+          "min": { "type": "number" },
+          "max": { "type": "number" },
+          "avg": { "type": "number" },
+          "p50": { "type": "number" },
+          "p95": { "type": "number" },
+          "p99": { "type": "number" },
+          "unit": { "type": "string" }
+        }
+      },
+      "GET /metrics/catalog": {
+        "description": "Lists all metric names the backend knows about. LangGraph supervisor calls this on startup to understand what data is available.",
+        "response_200": {
+          "metrics": {
+            "type": "array",
+            "items": {
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "labels": { "type": "array", "items": { "type": "string" } },
+              "unit": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "traces": {
+      "GET /traces/:trace_id": {
+        "description": "Fetch all spans for a distributed trace. log_query_agent calls this when it finds a failing trace_id in the logs.",
+        "response_200": {
+          "trace_id": { "type": "string" },
+          "root_service": { "type": "string" },
+          "total_duration_ms": { "type": "number" },
+          "spans": { "type": "array", "items": { "$ref": "Span" } }
+        },
+        "response_404": { "$ref": "ErrorResponse" }
+      },
+      "GET /traces": {
+        "description": "Search traces by service, time range, and error status.",
+        "query_params": {
+          "from": { "$ref": "Timestamp", "required": true },
+          "to": { "$ref": "Timestamp", "required": true },
+          "service": { "type": "string", "optional": true },
+          "status": { "type": "string", "enum": ["ok", "error", "timeout"], "optional": true },
+          "min_duration_ms": { "type": "integer", "optional": true },
+          "page_size": { "type": "integer", "default": 50 },
+          "cursor": { "type": "string", "optional": true }
+        },
+        "response_200": {
+          "traces": {
+            "type": "array",
+            "items": {
+              "trace_id": { "type": "string" },
+              "root_service": { "type": "string" },
+              "status": { "type": "string" },
+              "duration_ms": { "type": "number" },
+              "started_at": { "$ref": "Timestamp" },
+              "span_count": { "type": "integer" }
+            }
+          },
+          "next_cursor": { "type": "string", "nullable": true }
+        }
+      }
+    },
+
+    "services": {
+      "GET /services": {
+        "description": "Return the full service dependency graph. LangGraph supervisor loads this at the start of every investigation to understand blast radius.",
+        "response_200": {
+          "services": { "type": "array", "items": { "$ref": "ServiceNode" } },
+          "generated_at": { "$ref": "Timestamp" }
+        }
+      },
+      "GET /services/:service_id/health": {
+        "description": "Current health snapshot for one service including recent error rate, latency, and last deployment.",
+        "response_200": {
+          "service_id": { "type": "string" },
+          "health": { "$ref": "ServiceHealth" },
+          "error_rate_1m": { "type": "number" },
+          "p99_latency_ms": { "type": "number" },
+          "active_instances": { "type": "integer" },
+          "last_deploy": {
+            "timestamp": { "$ref": "Timestamp" },
+            "version": { "type": "string" },
+            "deployed_by": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "runbooks": {
+      "GET /runbooks/search": {
+        "description": "Semantic search over runbooks stored in Go's embedded vector index. rag_agent calls this with error descriptions as the query.",
+        "query_params": {
+          "q": { "type": "string", "required": true, "description": "Natural language query e.g. 'OOMKilled in payment service'" },
+          "top_k": { "type": "integer", "default": 5, "max": 20 },
+          "service_filter": { "type": "string", "optional": true },
+          "tag_filter": { "type": "string", "optional": true, "description": "Comma-separated tags" }
+        },
+        "response_200": {
+          "runbooks": { "type": "array", "items": { "$ref": "Runbook" } }
+        }
+      },
+      "GET /runbooks/:runbook_id": {
+        "description": "Fetch a single runbook by ID. Called after a search to get the full content.",
+        "response_200": { "$ref": "Runbook" },
+        "response_404": { "$ref": "ErrorResponse" }
+      },
+      "GET /runbooks": {
+        "description": "List all runbooks with pagination.",
+        "query_params": {
+          "tag": { "type": "string", "optional": true },
+          "service": { "type": "string", "optional": true },
+          "page": { "type": "integer", "default": 1 },
+          "page_size": { "type": "integer", "default": 20 }
+        },
+        "response_200": {
+          "runbooks": { "type": "array", "items": { "$ref": "Runbook" } },
+          "pagination": { "$ref": "Pagination" }
+        }
+      },
+      "POST /runbooks": {
+        "description": "Ingest a new runbook. Used by ops team to add documentation that LangGraph can consult.",
+        "request_body": {
+          "title": { "type": "string" },
+          "content": { "type": "string", "description": "Full markdown content" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "services": { "type": "array", "items": { "type": "string" } }
+        },
+        "response_201": { "$ref": "Runbook" }
+      }
+    },
+
+    "incidents": {
+      "GET /incidents": {
+        "description": "List historical incidents. Used by correlation_agent to find similar past events.",
+        "query_params": {
+          "service": { "type": "string", "optional": true },
+          "severity": { "$ref": "Severity", "optional": true },
+          "status": { "type": "string", "enum": ["open", "resolved"], "optional": true },
+          "from": { "$ref": "Timestamp", "optional": true },
+          "to": { "$ref": "Timestamp", "optional": true },
+          "page": { "type": "integer", "default": 1 },
+          "page_size": { "type": "integer", "default": 20 }
+        },
+        "response_200": {
+          "incidents": {
+            "type": "array",
+            "items": {
+              "incident_id": { "type": "string" },
+              "title": { "type": "string" },
+              "severity": { "$ref": "Severity" },
+              "status": { "type": "string" },
+              "affected_services": { "type": "array", "items": { "type": "string" } },
+              "opened_at": { "$ref": "Timestamp" },
+              "resolved_at": { "$ref": "Timestamp", "nullable": true },
+              "root_cause_summary": { "type": "string", "nullable": true }
+            }
+          },
+          "pagination": { "$ref": "Pagination" }
+        }
+      },
+      "POST /incidents": {
+        "description": "Create a new incident record. LangGraph calls this as soon as it begins investigating an alert, before it has answers.",
+        "request_body": {
+          "alert_id": { "type": "string" },
+          "title": { "type": "string" },
+          "severity": { "$ref": "Severity" },
+          "affected_services": { "type": "array", "items": { "type": "string" } },
+          "opened_by": { "type": "string", "description": "agent or human username" }
+        },
+        "response_201": {
+          "incident_id": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "string" },
+          "opened_at": { "$ref": "Timestamp" }
+        }
+      },
+      "GET /incidents/:incident_id": {
+        "description": "Fetch full incident details including linked report if available.",
+        "response_200": {
+          "incident_id": { "type": "string" },
+          "title": { "type": "string" },
+          "severity": { "$ref": "Severity" },
+          "status": { "type": "string" },
+          "alert_id": { "type": "string" },
+          "affected_services": { "type": "array", "items": { "type": "string" } },
+          "opened_at": { "$ref": "Timestamp" },
+          "resolved_at": { "$ref": "Timestamp", "nullable": true },
+          "report": { "$ref": "IncidentReport", "nullable": true },
+          "events": { "type": "array", "items": { "$ref": "_shared_types.Finding" } }
+        }
+      },
+      "PATCH /incidents/:incident_id": {
+        "description": "Update incident metadata. Called by LangGraph as it discovers more or by human from dashboard.",
+        "request_body": {
+          "title": { "type": "string", "optional": true },
+          "severity": { "$ref": "Severity", "optional": true },
+          "status": { "type": "string", "enum": ["open", "resolved"], "optional": true },
+          "resolved_at": { "$ref": "Timestamp", "optional": true },
+          "affected_services": { "type": "array", "items": { "type": "string" }, "optional": true }
+        },
+        "response_200": { "incident_id": { "type": "string" }, "updated_at": { "$ref": "Timestamp" } }
+      },
+      "POST /incidents/:incident_id/events": {
+        "description": "Stream intermediate findings from LangGraph into the incident timeline. Called repeatedly during analysis so the dashboard shows live progress.",
+        "request_body": { "$ref": "Finding" },
+        "response_201": { "finding_id": { "type": "string" }, "stored_at": { "$ref": "Timestamp" } }
+      },
+      "POST /incidents/:incident_id/report": {
+        "description": "Submit the final completed incident report. Last call LangGraph makes.",
+        "request_body": { "$ref": "IncidentReport" },
+        "response_201": { "report_id": { "type": "string" }, "stored_at": { "$ref": "Timestamp" } }
+      }
+    },
+
+    "system": {
+      "GET /health": {
+        "description": "Go backend liveness check. LangGraph checks this before starting an analysis.",
+        "response_200": {
+          "status": { "type": "string", "enum": ["ok", "degraded"] },
+          "components": {
+            "log_store": { "type": "string", "enum": ["ok", "degraded", "down"] },
+            "metric_store": { "type": "string", "enum": ["ok", "degraded", "down"] },
+            "redis": { "type": "string", "enum": ["ok", "degraded", "down"] },
+            "vector_index": { "type": "string", "enum": ["ok", "degraded", "down"] }
+          },
+          "uptime_seconds": { "type": "integer" }
+        }
+      },
+      "GET /ready": {
+        "description": "Kubernetes readiness probe. Returns 200 only when all stores are connected.",
+        "response_200": { "ready": true },
+        "response_503": { "ready": false, "reason": { "type": "string" } }
+      }
+    }
+  },
+
+  "langgraph_api": {
+    "_description": "Endpoints exposed by the LangGraph service. The Go backend calls these. Dashboard uses /analyses for status polling.",
+    "base_url": "http://langgraph-service:9000/api/v1",
+    "auth": {
+      "method": "Same shared Bearer token as Go backend",
+      "header": "Authorization: Bearer <INTERNAL_SERVICE_TOKEN>"
+    },
+
+    "POST /analyses": {
+      "description": "Trigger a new analysis. Go backend calls this immediately when a webhook alert fires.",
+      "request_body": {
+        "alert_id": { "type": "string", "required": true },
+        "alert": { "$ref": "Alert", "description": "Full alert object so LangGraph doesn't need to immediately call back to Go" },
+        "triggered_at": { "$ref": "Timestamp" },
+        "context": {
+          "type": "object",
+          "optional": true,
+          "description": "Any extra context Go can provide at trigger time",
+          "fields": {
+            "recent_deployments": {
+              "type": "array",
+              "items": {
+                "service": { "type": "string" },
+                "version": { "type": "string" },
+                "deployed_at": { "$ref": "Timestamp" }
+              }
+            },
+            "ongoing_incidents": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "response_202": {
+        "analysis_id": { "type": "string" },
+        "status": "pending",
+        "message": "Analysis queued"
+      }
+    },
+
+    "GET /analyses/:analysis_id": {
+      "description": "Poll analysis status. Dashboard calls this for live updates. Go backend can also call this.",
+      "response_200": {
+        "analysis_id": { "type": "string" },
+        "alert_id": { "type": "string" },
+        "incident_id": { "type": "string", "nullable": true },
+        "status": { "$ref": "AnalysisStatus" },
+        "current_agent": { "$ref": "AgentName", "nullable": true },
+        "progress": {
+          "type": "object",
+          "fields": {
+            "steps_completed": { "type": "integer" },
+            "steps_total": { "type": "integer" },
+            "current_step_description": { "type": "string" }
+          }
+        },
+        "findings_so_far": { "type": "integer", "description": "Count of findings posted so far" },
+        "started_at": { "$ref": "Timestamp" },
+        "completed_at": { "$ref": "Timestamp", "nullable": true },
+        "report_id": { "type": "string", "nullable": true },
+        "error": { "type": "string", "nullable": true }
+      }
+    },
+
+    "GET /analyses": {
+      "description": "List recent analyses. Dashboard uses this for the analysis history view.",
+      "query_params": {
+        "status": { "$ref": "AnalysisStatus", "optional": true },
+        "alert_id": { "type": "string", "optional": true },
+        "page": { "type": "integer", "default": 1 },
+        "page_size": { "type": "integer", "default": 20 }
+      },
+      "response_200": {
+        "analyses": {
+          "type": "array",
+          "items": {
+            "analysis_id": { "type": "string" },
+            "alert_id": { "type": "string" },
+            "status": { "$ref": "AnalysisStatus" },
+            "started_at": { "$ref": "Timestamp" },
+            "completed_at": { "$ref": "Timestamp", "nullable": true }
+          }
+        },
+        "pagination": { "$ref": "Pagination" }
+      }
+    },
+
+    "POST /analyses/:analysis_id/cancel": {
+      "description": "Cancel a running analysis. Human-initiated from dashboard when they want to stop a runaway investigation.",
+      "request_body": {
+        "reason": { "type": "string" },
+        "cancelled_by": { "type": "string" }
+      },
+      "response_200": { "analysis_id": { "type": "string" }, "status": "cancelled" }
+    },
+
+    "POST /analyses/:analysis_id/interrupt": {
+      "description": "Pause analysis and inject a human decision. Used for human-in-the-loop LangGraph patterns when the agent needs approval to proceed.",
+      "request_body": {
+        "interrupt_type": {
+          "type": "string",
+          "enum": [
+            "approve_fix",
+            "reject_fix",
+            "provide_context",
+            "override_root_cause"
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "description": "Type-specific payload",
+          "examples": {
+            "provide_context": { "message": "The DB was migrated 2 hours ago, that is likely the cause" },
+            "override_root_cause": { "root_cause": "Manual DB migration caused schema mismatch" },
+            "approve_fix": { "fix_index": 0 },
+            "reject_fix": { "fix_index": 0, "reason": "Too risky during market hours" }
+          }
+        },
+        "provided_by": { "type": "string" }
+      },
+      "response_200": { "analysis_id": { "type": "string" }, "status": "running", "message": "Interrupt accepted, analysis resumed" },
+      "response_409": { "$ref": "ErrorResponse", "note": "Returned if analysis is not in awaiting_human state" }
+    },
+
+    "GET /health": {
+      "description": "LangGraph service liveness. Go backend checks this before routing a webhook.",
+      "response_200": {
+        "status": { "type": "string", "enum": ["ok", "degraded"] },
+        "active_analyses": { "type": "integer" },
+        "queue_depth": { "type": "integer" }
+      }
+    }
+  },
+
+  "webhook_inbound": {
+    "_description": "Endpoints Go backend exposes for external monitoring tools to push alerts.",
+    "base_url": "http://go-backend:8080/webhooks",
+    "auth": {
+      "method": "HMAC-SHA256 signature",
+      "header": "X-Webhook-Signature: sha256=<signature>",
+      "note": "Go verifies the signature using a per-source secret. Reject with 401 if invalid. The secret is never logged."
+    },
+
+    "POST /webhooks/prometheus": {
+      "description": "Prometheus Alertmanager webhook receiver. Go backend parses the Alertmanager payload and converts it to internal Alert format, then triggers LangGraph.",
+      "request_body": {
+        "version": { "type": "string" },
+        "groupKey": { "type": "string" },
+        "status": { "type": "string", "enum": ["firing", "resolved"] },
+        "alerts": {
+          "type": "array",
+          "items": {
+            "status": { "type": "string" },
+            "labels": { "type": "object" },
+            "annotations": { "type": "object" },
+            "startsAt": { "type": "string" },
+            "endsAt": { "type": "string" },
+            "generatorURL": { "type": "string" }
+          }
+        }
+      },
+      "response_200": { "received": true, "alerts_processed": { "type": "integer" } },
+      "response_401": { "$ref": "ErrorResponse", "note": "Bad HMAC signature" }
+    },
+
+    "POST /webhooks/datadog": {
+      "description": "Datadog webhook receiver. Go parses Datadog's format and converts to internal Alert.",
+      "request_body": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "text": { "type": "string" },
+        "priority": { "type": "string" },
+        "tags": { "type": "string" },
+        "alert_metric": { "type": "string" },
+        "alert_status": { "type": "string" },
+        "alert_type": { "type": "string" },
+        "date_happened": { "type": "integer", "description": "Unix epoch seconds" }
+      },
+      "response_200": { "received": true },
+      "response_401": { "$ref": "ErrorResponse" }
+    },
+
+    "POST /webhooks/custom": {
+      "description": "Generic webhook for any source not natively supported. Payload must match internal Alert schema.",
+      "request_body": { "$ref": "Alert" },
+      "response_200": { "received": true, "alert_id": { "type": "string" } }
+    }
+  },
+
+  "websocket_protocol": {
+    "_description": "Bidirectional real-time channel. Primarily used by the dashboard. Go backend is the WS server. LangGraph streams progress over REST (POST /incidents/:id/events) and Go fans it out to WS clients.",
+    "endpoint": "ws://go-backend:8080/ws",
+    "auth": "Pass Bearer token as query param: ?token=<JWT> (JWT issued by Go backend for dashboard sessions)",
+
+    "message_envelope": {
+      "type": "object",
+      "fields": {
+        "event": { "type": "string", "description": "Event type identifier" },
+        "payload": { "type": "object" },
+        "timestamp": { "$ref": "Timestamp" },
+        "request_id": { "type": "string", "nullable": true, "description": "Echo back for client-initiated messages" }
+      }
+    },
+
+    "server_to_client_events": {
+      "alert.fired": {
+        "description": "Broadcast to all dashboard clients when a new alert comes in via webhook.",
+        "payload": { "$ref": "Alert" }
+      },
+      "alert.resolved": {
+        "description": "Broadcast when a firing alert resolves.",
+        "payload": {
+          "alert_id": { "type": "string" },
+          "resolved_at": { "$ref": "Timestamp" }
+        }
+      },
+      "analysis.started": {
+        "description": "Sent when LangGraph picks up an alert and begins working.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "alert_id": { "type": "string" },
+          "incident_id": { "type": "string" }
+        }
+      },
+      "analysis.agent_switched": {
+        "description": "Sent each time the supervisor hands off to a different agent. Powers the live step-by-step view on dashboard.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "from_agent": { "$ref": "AgentName", "nullable": true },
+          "to_agent": { "$ref": "AgentName" },
+          "reason": { "type": "string" }
+        }
+      },
+      "analysis.finding": {
+        "description": "Forwarded in real time when LangGraph POSTs a new finding to Go backend.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "incident_id": { "type": "string" },
+          "finding": { "$ref": "Finding" }
+        }
+      },
+      "analysis.awaiting_human": {
+        "description": "LangGraph has reached a decision point and needs human input. Dashboard should show an action card.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "incident_id": { "type": "string" },
+          "question": { "type": "string" },
+          "interrupt_type": { "type": "string", "enum": ["approve_fix", "reject_fix", "provide_context", "override_root_cause"] },
+          "context": { "type": "object", "description": "What the agent knows so far to help the human decide" },
+          "timeout_at": { "$ref": "Timestamp", "description": "If human doesn't respond by this time, analysis auto-continues with default path" }
+        }
+      },
+      "analysis.completed": {
+        "description": "LangGraph has finished. Report is ready. Dashboard should display the report view.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "incident_id": { "type": "string" },
+          "report_id": { "type": "string" },
+          "duration_ms": { "type": "integer" }
+        }
+      },
+      "analysis.failed": {
+        "description": "Analysis failed due to an unrecoverable error.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "incident_id": { "type": "string" },
+          "error_code": { "type": "string" },
+          "error_message": { "type": "string" }
+        }
+      },
+      "incident.updated": {
+        "description": "Any incident field changed (status, severity, title). Dashboard should refresh that incident card.",
+        "payload": {
+          "incident_id": { "type": "string" },
+          "changes": { "type": "object", "description": "Key-value map of changed fields" },
+          "updated_by": { "type": "string" },
+          "updated_at": { "$ref": "Timestamp" }
+        }
+      },
+      "service.health_changed": {
+        "description": "A service transitioned health state. Dashboard service map should update.",
+        "payload": {
+          "service_id": { "type": "string" },
+          "from_health": { "$ref": "ServiceHealth" },
+          "to_health": { "$ref": "ServiceHealth" },
+          "detected_at": { "$ref": "Timestamp" }
+        }
+      },
+      "ping": {
+        "description": "Server keepalive. Client must respond with pong within 10 seconds or connection is dropped.",
+        "payload": { "server_time": { "$ref": "Timestamp" } }
+      }
+    },
+
+    "client_to_server_events": {
+      "subscribe.incident": {
+        "description": "Dashboard subscribes to updates for a specific incident (e.g. user opens incident detail page). Server will push granular events for this incident.",
+        "payload": { "incident_id": { "type": "string" } }
+      },
+      "unsubscribe.incident": {
+        "description": "Dashboard navigates away from incident detail page.",
+        "payload": { "incident_id": { "type": "string" } }
+      },
+      "human_input": {
+        "description": "Human responds to an awaiting_human pause. Go backend forwards to LangGraph via POST /analyses/:id/interrupt.",
+        "payload": {
+          "analysis_id": { "type": "string" },
+          "interrupt_type": { "type": "string" },
+          "response_payload": { "type": "object" },
+          "provided_by": { "type": "string" }
+        }
+      },
+      "pong": {
+        "description": "Client response to server ping.",
+        "payload": {}
+      }
+    }
+  },
+
+  "internal_flow_sequences": {
+    "_description": "Step-by-step call sequences for the most critical scenarios. Use these as integration test blueprints.",
+
+    "happy_path_alert_to_report": [
+      "1. Prometheus fires → POST /webhooks/prometheus → Go validates HMAC",
+      "2. Go converts payload to Alert, stores it, assigns alert_id",
+      "3. Go → POST /analyses (LangGraph) with full Alert object → receives analysis_id",
+      "4. LangGraph supervisor → POST /incidents (Go) → receives incident_id",
+      "5. LangGraph supervisor → GET /services (Go) → loads service topology",
+      "6. Supervisor delegates to log_query_agent",
+      "7. WS: server sends analysis.agent_switched to dashboard",
+      "8. log_query_agent → GET /logs?from=T-10m&to=T&levels=ERROR,FATAL&services=X (Go)",
+      "9. log_query_agent → GET /logs/anomalies?from=T-10m&to=T (Go)",
+      "10. log_query_agent → GET /traces/:trace_id for each failing trace found in logs",
+      "11. log_query_agent → POST /incidents/:id/events with log_anomaly Finding",
+      "12. WS: Go broadcasts analysis.finding to subscribed dashboard clients",
+      "13. Supervisor delegates to rag_agent",
+      "14. WS: analysis.agent_switched broadcast",
+      "15. rag_agent → GET /runbooks/search?q=<error description> (Go)",
+      "16. rag_agent → GET /runbooks/:id for top matches",
+      "17. rag_agent → POST /incidents/:id/events with runbook_match Finding",
+      "18. Supervisor delegates to correlation_agent",
+      "19. correlation_agent → POST /metrics/query/batch (Go) — fetches CPU, memory, error rate, latency",
+      "20. correlation_agent → GET /incidents?service=X&from=T-30d (Go) — finds similar past incidents",
+      "21. correlation_agent → POST /incidents/:id/events with historical_correlation Finding",
+      "22. Supervisor delegates to report_agent",
+      "23. report_agent compiles all findings into IncidentReport",
+      "24. report_agent → POST /incidents/:id/report (Go) — submits final report",
+      "25. report_agent → PATCH /incidents/:id { status: resolved } if root cause found",
+      "26. WS: Go broadcasts analysis.completed to all dashboard clients",
+      "27. Go → PATCH /analyses/:id (internal state update, not an API call)"
+    ],
+
+    "human_in_the_loop_interrupt": [
+      "1-21. Same as happy path up through correlation findings",
+      "22. Supervisor unsure of root cause, confidence < 0.6",
+      "23. LangGraph sets analysis status to awaiting_human internally",
+      "24. LangGraph calls Go: POST /incidents/:id/events with a special finding type that includes interrupt metadata",
+      "25. Go broadcasts WS: analysis.awaiting_human with question and context to dashboard",
+      "26. Human sees action card in dashboard, types context or approves/rejects",
+      "27. Dashboard sends WS: human_input event to Go",
+      "28. Go → POST /analyses/:id/interrupt (LangGraph) with human payload",
+      "29. LangGraph resumes from awaiting_human state with the injected context",
+      "30. Analysis continues to report phase"
+    ],
+
+    "alert_resolves_during_analysis": [
+      "1. Analysis is running (status: running)",
+      "2. Prometheus sends resolved webhook → POST /webhooks/prometheus",
+      "3. Go updates alert status to resolved",
+      "4. WS: Go broadcasts alert.resolved to dashboard",
+      "5. Go does NOT cancel the analysis — the report is still valuable as a post-mortem",
+      "6. Analysis continues and completes normally",
+      "7. Final report is tagged with note that alert resolved during investigation"
+    ],
+
+    "go_backend_store_degraded": [
+      "1. LangGraph makes log query: GET /logs → Go returns 504 with LOG_QUERY_TIMEOUT error code",
+      "2. LangGraph log_query_agent retries with narrower time window (T-5m instead of T-10m)",
+      "3. If still 504, agent falls back to anomaly endpoint: GET /logs/anomalies",
+      "4. If anomaly endpoint also fails, agent posts a Finding with type=log_anomaly and confidence=0.2 noting data unavailability",
+      "5. Analysis continues with degraded evidence quality, noted in final report"
+    ],
+
+    "multiple_simultaneous_alerts": [
+      "1. Two alerts fire within seconds of each other",
+      "2. Go receives both webhooks, creates two Alert records",
+      "3. Go calls POST /analyses twice — LangGraph queues both",
+      "4. LangGraph checks GET /incidents for each — finds they share an affected service",
+      "5. LangGraph correlation_agent merges context across the two analyses",
+      "6. Two separate IncidentReports are produced but reference each other in similar_past_incidents"
+    ]
+  },
+
+  "error_codes": {
+    "LOG_QUERY_TIMEOUT": "Log store query exceeded 10s deadline",
+    "LOG_INVALID_REGEX": "Regex pattern in search param is malformed",
+    "METRIC_NOT_FOUND": "Metric name does not exist in catalog",
+    "ALERT_NOT_FOUND": "No alert found with given ID",
+    "RUNBOOK_NOT_FOUND": "No runbook found with given ID",
+    "INCIDENT_NOT_FOUND": "No incident found with given ID",
+    "ANALYSIS_NOT_FOUND": "No analysis found with given ID",
+    "ANALYSIS_NOT_AWAITING_HUMAN": "Interrupt posted but analysis is not in awaiting_human state",
+    "ANALYSIS_ALREADY_RUNNING": "Alert already has a running analysis",
+    "WEBHOOK_BAD_SIGNATURE": "HMAC signature mismatch",
+    "BATCH_TOO_LARGE": "Batch query exceeds max_items limit",
+    "UNAUTHORIZED": "Missing or invalid service token"
+  },
+
+  "versioning_policy": {
+    "rule": "URI versioning: /api/v1/. When a breaking change is needed, /api/v2/ is introduced and v1 is kept alive for a two-week migration window.",
+    "additive_changes": "New optional fields on request/response bodies do not require a version bump. Both engineers must be notified in the PR.",
+    "breaking_changes": "Removing fields, changing types, changing enum values, or changing HTTP method — all require a major version bump and migration plan."
+  }
+}
