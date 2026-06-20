@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 
-from workflow.graph import build_graph
+from workflow.graph import get_graph
 
 
 app = FastAPI(title="LangGraph SRE Copilot")
 
-graph = build_graph()
+graph = get_graph()
 
 
 
@@ -29,16 +29,25 @@ async def health():
 async def start_analysis():
 
     initial_state = {
+        "analysis_id": "analysis_001",
 
-        "alert_id": "test_alert",
+        "alert": {
+            "id": "alert_001",
+            "name": "High Error Rate",
+            "severity": "critical",
+            "affected_services": ["payment-api"],
+            "fired_at": "2026-06-20T12:00:00Z"
+        },
 
-        "status": "running",
+        "incident_id": None,
 
         "findings": [],
 
-        "current_agent": None,
+        "current_agent": "supervisor",
 
-        "incident_id": None
+        "status": "running",
+
+        "report": None
     }
 
 
