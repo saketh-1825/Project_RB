@@ -6,14 +6,19 @@ from schemas.state import AnalysisState
 from internal.client.go_backend import GoBackendClient
 
 def extract_log_ids(logs: List[Dict[str, Any]]) -> List[str]:
-    return [log["id"] for log in logs if "id" in log]
+    if not isinstance(logs, list):
+        return []
+    return [str(log["id"]) for log in logs if isinstance(log, dict) and "id" in log and log["id"] is not None]
 
 def extract_trace_ids(logs: List[Dict[str, Any]]) -> List[str]:
+    if not isinstance(logs, list):
+        return []
     trace_ids = set()
     for log in logs:
-        t_id = log.get("trace_id")
-        if t_id:
-            trace_ids.add(t_id)
+        if isinstance(log, dict):
+            t_id = log.get("trace_id")
+            if t_id is not None:
+                trace_ids.add(str(t_id))
     return list(trace_ids)
 
 def build_finding(log_ids: List[str], trace_ids: List[str]) -> Dict[str, Any]:
@@ -24,8 +29,8 @@ def build_finding(log_ids: List[str], trace_ids: List[str]) -> Dict[str, Any]:
         "title": "Error spike detected",
         "summary": "Large number of ERROR logs found",
         "evidence": {
-            "log_ids": log_ids,
-            "trace_ids": trace_ids
+            "log_ids": log_ids if isinstance(log_ids, list) else [],
+            "trace_ids": trace_ids if isinstance(trace_ids, list) else []
         },
         "confidence": 0.9
     }
@@ -58,7 +63,9 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
             services=affected_services,
             levels=["ERROR", "FATAL"]
         )
-        logs = logs_resp.get("logs", [])
+        logs = logs_resp.get("logs") if logs_resp else []
+        if not isinstance(logs, list):
+            logs = []
     except Exception:
         logs = []
 

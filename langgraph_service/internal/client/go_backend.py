@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 import httpx
 
@@ -44,24 +45,65 @@ class GoBackendClient:
         levels: Optional[List[str]] = None
     ) -> Dict[str, Any]:
 
-        params: Dict[str, Any] = {
-            "from": from_time,
-            "to": to_time
-        }
+        current_from = from_time
+        retries = 0
+        max_retries = 2
 
-        if services:
-            params["services"] = ",".join(services)
+        while True:
+            params: Dict[str, Any] = {
+                "from": current_from,
+                "to": to_time
+            }
 
-        if levels:
-            params["levels"] = ",".join(levels)
+            if services:
+                params["services"] = ",".join(services)
 
-        response = self.client.get(
-            "/api/v1/logs",
-            params=params
-        )
+            if levels:
+                params["levels"] = ",".join(levels)
 
-        response.raise_for_status()
-        return response.json()
+            response = self.client.get(
+                "/api/v1/logs",
+                params=params
+            )
+
+            if response.status_code >= 400:
+                retryable = False
+                if response.status_code == 504:
+                    retryable = True
+                else:
+                    try:
+                        body = response.json()
+                        if isinstance(body, dict):
+                            err_code = body.get("error", {}).get("code")
+                            if err_code == "LOG_QUERY_TIMEOUT":
+                                retryable = True
+                    except Exception:
+                        pass
+
+                if retryable and retries < max_retries:
+                    retries += 1
+                    try:
+                        f_clean = current_from.replace("Z", "+00:00")
+                        t_clean = to_time.replace("Z", "+00:00")
+                        f_dt = datetime.fromisoformat(f_clean)
+                        t_dt = datetime.fromisoformat(t_clean)
+                        
+                        duration = t_dt - f_dt
+                        half_duration = duration / 2
+                        new_f_dt = t_dt - half_duration
+                        
+                        new_f_str = new_f_dt.isoformat()
+                        if "+00:00" in new_f_str:
+                            new_f_str = new_f_str.replace("+00:00", "Z")
+                        elif current_from.endswith("Z") and not new_f_str.endswith("Z"):
+                            new_f_str += "Z"
+                        current_from = new_f_str
+                    except Exception:
+                        pass
+                    continue
+
+            response.raise_for_status()
+            return response.json()
 
     def get_log_anomalies(
         self,
