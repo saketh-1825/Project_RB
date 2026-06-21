@@ -14,3 +14,12 @@ class AnalysisState(TypedDict, total=False):
     incident_summary: str
     incident_events: List[Dict[str, Any]]
     rag_query: str
+
+    # Human-in-the-loop interrupt fields
+    human_context: Optional[str]
+    awaiting_human: bool
+    waiting_at: Optional[str]
+    interrupt_type: Optional[str]
+    interrupt_question: Optional[str]
+    resume_count: int
+    last_interrupted_at: Optional[str]

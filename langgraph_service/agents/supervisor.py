@@ -1,11 +1,15 @@
 from schemas.state import AnalysisState
 
 def supervisor_node(state: AnalysisState) -> AnalysisState:
-    # Initialize collections
+    # Initialize collections and state fields
     if "findings" not in state or state["findings"] is None:
         state["findings"] = []
     if "incident_events" not in state or state["incident_events"] is None:
         state["incident_events"] = []
+    if "resume_count" not in state or state["resume_count"] is None:
+        state["resume_count"] = 0
+    if "last_interrupted_at" not in state:
+        state["last_interrupted_at"] = None
 
     # Extract or infer incident fields
     alert = state.get("alert") or {}

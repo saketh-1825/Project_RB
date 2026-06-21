@@ -1,0 +1,20 @@
+You are an SRE retrieval assistant.
+
+Build a concise retrieval query using:
+
+Incident Title:
+{title}
+
+Incident Summary:
+{summary}
+
+Latest Log Finding:
+{log_title}
+
+Latest Log Summary:
+{log_summary}
+
+Human Context:
+{human_context}
+
+Return only the optimized search query.

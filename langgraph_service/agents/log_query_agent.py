@@ -4,11 +4,15 @@ from typing import Any, Dict, List
 
 from schemas.state import AnalysisState
 from internal.client.go_backend import GoBackendClient
+from internal.errors import GoBackendError
+from agents.helpers import build_degraded_finding
+
 
 def extract_log_ids(logs: List[Dict[str, Any]]) -> List[str]:
     if not isinstance(logs, list):
         return []
     return [str(log["id"]) for log in logs if isinstance(log, dict) and "id" in log and log["id"] is not None]
+
 
 def extract_trace_ids(logs: List[Dict[str, Any]]) -> List[str]:
     if not isinstance(logs, list):
@@ -20,6 +24,7 @@ def extract_trace_ids(logs: List[Dict[str, Any]]) -> List[str]:
             if t_id is not None:
                 trace_ids.add(str(t_id))
     return list(trace_ids)
+
 
 def build_finding(log_ids: List[str], trace_ids: List[str]) -> Dict[str, Any]:
     return {
@@ -35,7 +40,16 @@ def build_finding(log_ids: List[str], trace_ids: List[str]) -> Dict[str, Any]:
         "confidence": 0.9
     }
 
+
 def log_query_agent_node(state: AnalysisState) -> AnalysisState:
+    # Pass-through if log query findings are already generated (resuming execution)
+    findings = state.get("findings", [])
+    if findings:
+        log_findings = [f for f in findings if f.get("agent") == "log_query_agent"]
+        if log_findings:
+            state["current_agent"] = "rag_agent"
+            return state
+
     base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
     token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
     client = GoBackendClient(base_url=base_url, token=token)
@@ -56,6 +70,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
     from_time_str = (fired_at - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
     to_time_str = fired_at.isoformat().replace("+00:00", "Z")
 
+    # 1. Fetch logs with degradation fallback
     try:
         logs_resp = client.get_logs(
             from_time=from_time_str,
@@ -66,8 +81,30 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
         logs = logs_resp.get("logs") if logs_resp else []
         if not isinstance(logs, list):
             logs = []
-    except Exception:
-        logs = []
+    except GoBackendError as e:
+        category = getattr(e, "error_category", "backend_unavailable")
+        finding = build_degraded_finding(
+            agent="log_query_agent",
+            status_code=e.status_code,
+            message="Log retrieval failed",
+            error_category=category
+        )
+        if "findings" not in state or not isinstance(state["findings"], list):
+            state["findings"] = []
+        state["findings"].append(finding)
+
+        log_event = {
+            "source": "log_query_agent",
+            "event_type": "degraded",
+            "message": "Log query service degraded",
+            "details": finding
+        }
+        if "incident_events" not in state or not isinstance(state["incident_events"], list):
+            state["incident_events"] = []
+        state["incident_events"].append(log_event)
+
+        state["current_agent"] = "rag_agent"
+        return state
 
     try:
         client.get_log_anomalies(

@@ -3,38 +3,22 @@ from typing import Any, Dict, List
 
 from schemas.state import AnalysisState
 from internal.client.go_backend import GoBackendClient
+from internal.errors import GoBackendError
+from agents.helpers import build_degraded_finding
+from prompts import load_prompt
 
-def build_search_query(title: str, summary: str) -> str:
-    return f"{title} {summary}"
-
-def build_runbook_finding(runbook_id: str, similarity_score: float, summary: str) -> Dict[str, Any]:
-    return {
-        "agent": "rag_agent",
-        "type": "runbook_match",
-        "severity": "medium",
-        "title": "Matching runbook found",
-        "summary": summary,
-        "confidence": similarity_score,
-        "evidence": {
-            "runbook_id": runbook_id
-        }
-    }
 
 def rag_agent_node(state: AnalysisState) -> AnalysisState:
     base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
     token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
     client = GoBackendClient(base_url=base_url, token=token)
 
-    # 1. Build/Read rag_query using incident_title, incident_summary, and latest log finding
-    query_parts = []
+    # 1. Build/Read rag_query using template loaded from file
     incident_title = state.get("incident_title", "")
     incident_summary = state.get("incident_summary", "")
 
-    if incident_title:
-        query_parts.append(incident_title)
-    if incident_summary:
-        query_parts.append(incident_summary)
-
+    log_title = ""
+    log_summary = ""
     findings = state.get("findings", [])
     if findings:
         log_findings = [f for f in findings if f.get("agent") == "log_query_agent"]
@@ -42,18 +26,26 @@ def rag_agent_node(state: AnalysisState) -> AnalysisState:
             latest_log_finding = log_findings[-1]
             log_title = latest_log_finding.get("title", "")
             log_summary = latest_log_finding.get("summary", "")
-            if log_title:
-                query_parts.append(log_title)
-            if log_summary:
-                query_parts.append(log_summary)
 
-    # Combine incident details with log findings
-    query = " ".join(query_parts).strip()
+    human_context = state.get("human_context") or ""
+
+    # Clear human_context from state temporarily for the pause check
+    if "human_context" in state:
+        state["human_context"] = None
+
+    # Load prompt and format query
+    template = load_prompt("rag_query_prompt.txt")
+    query = template.format(
+        title=incident_title,
+        summary=incident_summary,
+        log_title=log_title,
+        log_summary=log_summary,
+        human_context=human_context
+    ).strip()
     
-    # Store the final rag_query back into state
     state["rag_query"] = query
 
-    # 2. Call search_runbooks
+    # 2. Call search_runbooks with degradation fallback
     try:
         search_response = client.search_runbooks(query)
         if isinstance(search_response, list):
@@ -67,9 +59,49 @@ def rag_agent_node(state: AnalysisState) -> AnalysisState:
                     runbooks = []
         else:
             runbooks = []
-    except Exception as e:
-        print(f"RAG search failed: {e}")
-        runbooks = []
+    except GoBackendError as e:
+        category = getattr(e, "error_category", "backend_unavailable")
+        finding = build_degraded_finding(
+            agent="rag_agent",
+            status_code=e.status_code,
+            message="Runbook lookup failed",
+            error_category=category
+        )
+        if "findings" not in state or state["findings"] is None:
+            state["findings"] = []
+        state["findings"].append(finding)
+
+        event = {
+            "source": "rag_agent",
+            "event_type": "degraded",
+            "message": "Runbook lookup unavailable",
+            "details": finding
+        }
+        if "incident_events" not in state or state["incident_events"] is None:
+            state["incident_events"] = []
+        state["incident_events"].append(event)
+
+        state["current_agent"] = "rag_agent"
+        state["status"] = "completed"
+        return state
+
+    # Get similarity score of top match
+    similarity_score = 0.0
+    if runbooks:
+        top_match = runbooks[0]
+        similarity_score = top_match.get("similarity_score", top_match.get("score", 0.0))
+
+    # Check if we should pause for human context (similarity < 0.7 and no human_context yet)
+    if similarity_score < 0.7 and not state.get("human_context"):
+        state["status"] = "awaiting_human"
+        state["awaiting_human"] = True
+        state["waiting_at"] = "rag_agent"
+        state["interrupt_type"] = "provide_context"
+        state["interrupt_question"] = load_prompt("interrupt_question_prompt.txt")
+        return state
+
+    # Restore human_context on success
+    state["human_context"] = human_context
 
     # 3. Process top runbook
     if runbooks:
@@ -114,5 +146,6 @@ def rag_agent_node(state: AnalysisState) -> AnalysisState:
 
     state["current_agent"] = "rag_agent"
     state["status"] = "completed"
+    state["awaiting_human"] = False
     
     return state

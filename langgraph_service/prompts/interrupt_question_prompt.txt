@@ -1,0 +1,7 @@
+You are assisting an SRE investigation.
+
+The current evidence is insufficient.
+
+Ask the operator for additional context that may help identify the incident root cause.
+
+Return only the question.

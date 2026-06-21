@@ -2,6 +2,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import httpx
 
+from internal.errors import (
+    GoBackendError,
+    BackendTimeoutError,
+    BackendUnavailableError,
+    BackendNotFoundError
+)
+
 
 class GoBackendClient:
     def __init__(self, base_url: str, token: str):
@@ -15,13 +22,59 @@ class GoBackendClient:
             timeout=30.0
         )
 
+    def _handle_response(self, response: httpx.Response) -> httpx.Response:
+        if response.status_code == 404:
+            raise BackendNotFoundError(
+                status_code=404,
+                message=f"Backend resource not found (404) at {response.url}",
+                original_exception=None
+            )
+        elif response.status_code == 500:
+            raise BackendUnavailableError(
+                status_code=500,
+                message=f"Backend server error (500) at {response.url}",
+                original_exception=None
+            )
+        elif response.status_code == 504:
+            raise BackendTimeoutError(
+                status_code=504,
+                message=f"Backend gateway timeout (504) at {response.url}",
+                original_exception=None
+            )
+        
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise GoBackendError(
+                status_code=response.status_code,
+                message=f"HTTP status error: {e}",
+                original_exception=e
+            ) from e
+        return response
+
+    def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        try:
+            response = self.client.request(method, path, **kwargs)
+            return self._handle_response(response)
+        except httpx.TimeoutException as e:
+            raise BackendTimeoutError(
+                status_code=504,
+                message=f"Backend request timed out: {e}",
+                original_exception=e
+            ) from e
+        except httpx.RequestError as e:
+            raise BackendUnavailableError(
+                status_code=503,
+                message=f"Backend service unavailable: {e}",
+                original_exception=e
+            ) from e
+
     # ---------------------------------------------------
     # HEALTH
     # ---------------------------------------------------
 
     def get_health(self) -> Dict[str, Any]:
-        response = self.client.get("/api/v1/health")
-        response.raise_for_status()
+        response = self._request("GET", "/api/v1/health")
         return response.json()
 
     # ---------------------------------------------------
@@ -29,8 +82,7 @@ class GoBackendClient:
     # ---------------------------------------------------
 
     def get_services(self) -> Dict[str, Any]:
-        response = self.client.get("/api/v1/services")
-        response.raise_for_status()
+        response = self._request("GET", "/api/v1/services")
         return response.json()
 
     # ---------------------------------------------------
@@ -61,10 +113,44 @@ class GoBackendClient:
             if levels:
                 params["levels"] = ",".join(levels)
 
-            response = self.client.get(
-                "/api/v1/logs",
-                params=params
-            )
+            try:
+                response = self.client.get(
+                    "/api/v1/logs",
+                    params=params
+                )
+            except httpx.TimeoutException as e:
+                if retries < max_retries:
+                    retries += 1
+                    try:
+                        f_clean = current_from.replace("Z", "+00:00")
+                        t_clean = to_time.replace("Z", "+00:00")
+                        f_dt = datetime.fromisoformat(f_clean)
+                        t_dt = datetime.fromisoformat(t_clean)
+                        
+                        duration = t_dt - f_dt
+                        half_duration = duration / 2
+                        new_f_dt = t_dt - half_duration
+                        
+                        new_f_str = new_f_dt.isoformat()
+                        if "+00:00" in new_f_str:
+                            new_f_str = new_f_str.replace("+00:00", "Z")
+                        elif current_from.endswith("Z") and not new_f_str.endswith("Z"):
+                            new_f_str += "Z"
+                        current_from = new_f_str
+                    except Exception:
+                        pass
+                    continue
+                raise BackendTimeoutError(
+                    status_code=504,
+                    message=f"Request timeout: {e}",
+                    original_exception=e
+                ) from e
+            except httpx.RequestError as e:
+                raise BackendUnavailableError(
+                    status_code=503,
+                    message=f"Request failed: {e}",
+                    original_exception=e
+                ) from e
 
             if response.status_code >= 400:
                 retryable = False
@@ -102,7 +188,7 @@ class GoBackendClient:
                         pass
                     continue
 
-            response.raise_for_status()
+            self._handle_response(response)
             return response.json()
 
     def get_log_anomalies(
@@ -120,12 +206,11 @@ class GoBackendClient:
         if services:
             params["services"] = ",".join(services)
 
-        response = self.client.get(
+        response = self._request(
+            "GET",
             "/api/v1/logs/anomalies",
             params=params
         )
-
-        response.raise_for_status()
         return response.json()
 
     # ---------------------------------------------------
@@ -133,12 +218,10 @@ class GoBackendClient:
     # ---------------------------------------------------
 
     def get_trace(self, trace_id: str) -> Dict[str, Any]:
-
-        response = self.client.get(
+        response = self._request(
+            "GET",
             f"/api/v1/traces/{trace_id}"
         )
-
-        response.raise_for_status()
         return response.json()
 
     # ---------------------------------------------------
@@ -156,21 +239,15 @@ class GoBackendClient:
             "top_k": top_k
         }
 
-        response = self.client.get(
+        response = self._request(
+            "GET",
             "/api/v1/runbooks/search",
             params=params
         )
-
-        response.raise_for_status()
         return response.json()
 
     def get_runbooks(self) -> Dict[str, Any]:
-
-        response = self.client.get(
-            "/api/v1/runbooks"
-        )
-
-        response.raise_for_status()
+        response = self._request("GET", "/api/v1/runbooks")
         return response.json()
 
     # ---------------------------------------------------
@@ -182,12 +259,11 @@ class GoBackendClient:
         data: Dict[str, Any]
     ) -> Dict[str, Any]:
 
-        response = self.client.post(
+        response = self._request(
+            "POST",
             "/api/v1/incidents",
             json=data
         )
-
-        response.raise_for_status()
         return response.json()
 
     def get_incident(
@@ -195,11 +271,10 @@ class GoBackendClient:
         incident_id: str
     ) -> Dict[str, Any]:
 
-        response = self.client.get(
+        response = self._request(
+            "GET",
             f"/api/v1/incidents/{incident_id}"
         )
-
-        response.raise_for_status()
         return response.json()
 
     def post_finding(
@@ -208,12 +283,11 @@ class GoBackendClient:
         finding: Dict[str, Any]
     ) -> Dict[str, Any]:
 
-        response = self.client.post(
+        response = self._request(
+            "POST",
             f"/api/v1/incidents/{incident_id}/events",
             json=finding
         )
-
-        response.raise_for_status()
         return response.json()
 
     def submit_report(
@@ -222,12 +296,11 @@ class GoBackendClient:
         report: Dict[str, Any]
     ) -> Dict[str, Any]:
 
-        response = self.client.post(
+        response = self._request(
+            "POST",
             f"/api/v1/incidents/{incident_id}/report",
             json=report
         )
-
-        response.raise_for_status()
         return response.json()
 
     # ---------------------------------------------------
