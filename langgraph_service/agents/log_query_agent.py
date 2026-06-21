@@ -40,7 +40,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
     token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
     client = GoBackendClient(base_url=base_url, token=token)
 
-    alert = state.get("alert", {})
+    alert = state.get("alert") or {}
     affected_services = alert.get("affected_services", [])
     fired_at_str = alert.get("fired_at")
     
@@ -92,6 +92,17 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
         state["findings"] = []
     
     state["findings"].append(finding)
+
+    if "incident_events" not in state or not isinstance(state["incident_events"], list):
+        state["incident_events"] = []
+
+    log_event = {
+        "source": "log_query_agent",
+        "event_type": "log_anomaly",
+        "message": "Error spike detected in logs",
+        "details": finding
+    }
+    state["incident_events"].append(log_event)
 
     incident_id = state.get("incident_id")
     if incident_id:

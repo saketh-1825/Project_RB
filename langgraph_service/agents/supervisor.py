@@ -1,30 +1,23 @@
-import os
 from schemas.state import AnalysisState
-from internal.client.go_backend import GoBackendClient
 
 def supervisor_node(state: AnalysisState) -> AnalysisState:
-    base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
-    token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
-    client = GoBackendClient(base_url=base_url, token=token)
+    # Initialize collections
+    if "findings" not in state or state["findings"] is None:
+        state["findings"] = []
+    if "incident_events" not in state or state["incident_events"] is None:
+        state["incident_events"] = []
 
-    health_response = client.get_health()
-    if health_response.get("status") != "ok" and health_response.get("health") != "ok":
-        state["status"] = "failed"
-        return state
-
-    alert = state.get("alert", {})
-    incident_data = {
-        "title": alert.get("name", "Generated Incident"),
-        "severity": alert.get("severity", "critical"),
-        "status": "open",
-        "alert_id": alert.get("alert_id")
-    }
+    # Extract or infer incident fields
+    alert = state.get("alert") or {}
+    incident_title = state.get("incident_title") or alert.get("name") or "Generated Incident"
+    incident_summary = state.get("incident_summary") or alert.get("annotations", {}).get("description") or alert.get("summary") or "P95 latency exceeded threshold"
     
-    incident_response = client.create_incident(incident_data)
-    state["incident_id"] = incident_response.get("incident_id")
-
-    services_response = client.get_services()
-    state["services"] = services_response
+    # Store back to state
+    state["incident_title"] = incident_title
+    state["incident_summary"] = incident_summary
+    
+    # Store initial rag_query in state
+    state["rag_query"] = f"{incident_title} {incident_summary}".strip()
 
     state["current_agent"] = "log_query_agent"
     state["status"] = "running"
