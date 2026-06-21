@@ -105,10 +105,22 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
     # Workflow Integration Tests (with Mocked Backend Calls)
     # ---------------------------------------------------
 
+    @patch("internal.client.go_backend.GoBackendClient.submit_report")
+    @patch("internal.client.go_backend.GoBackendClient.post_finding")
+    @patch("internal.client.go_backend.GoBackendClient._request")
+    @patch("internal.client.go_backend.GoBackendClient.create_incident")
+    @patch("internal.client.go_backend.GoBackendClient.get_services")
+    @patch("internal.client.go_backend.GoBackendClient.get_health")
     @patch("internal.client.go_backend.GoBackendClient.get_logs")
     @patch("internal.client.go_backend.GoBackendClient.search_runbooks")
-    def test_normal_operation_works_fine(self, mock_search, mock_get_logs):
+    def test_normal_operation_works_fine(self, mock_search, mock_get_logs,
+                                         mock_health, mock_services,
+                                         mock_create_incident, mock_request,
+                                         mock_post_finding, mock_submit_report):
         # Mimic normal successful backend response
+        mock_health.return_value = {"status": "ok", "components": {}}
+        mock_services.return_value = {"services": []}
+        mock_create_incident.return_value = {"incident_id": "inc-test-001", "status": "open"}
         mock_get_logs.return_value = {
             "logs": [
                 {"id": "log-1", "severity": "ERROR", "message": "Connection timeout", "trace_id": "tr-123"}
@@ -122,6 +134,11 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
                 "similarity_score": 0.95
             }
         ]
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"incidents": [], "pagination": {}}
+        mock_request.return_value = mock_resp
+        mock_post_finding.return_value = {"finding_id": "f-1", "stored_at": "now"}
+        mock_submit_report.return_value = {"report_id": "r-1", "stored_at": "now"}
 
         graph = get_graph()
         initial_state = {
@@ -133,17 +150,39 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         # Normal execution should yield regular findings and complete successfully
         self.assertEqual(result.get("status"), "completed")
         findings = result.get("findings", [])
-        self.assertEqual(len(findings), 2)
+        # 4 findings: log_query_agent + rag_agent + correlation_agent + report_agent
+        self.assertEqual(len(findings), 4)
         
         self.assertEqual(findings[0]["agent"], "log_query_agent")
         self.assertEqual(findings[0]["type"], "log_anomaly")
         self.assertEqual(findings[1]["agent"], "rag_agent")
         self.assertEqual(findings[1]["type"], "runbook")
         self.assertEqual(findings[1]["runbook_id"], "rb-100")
+        self.assertEqual(findings[2]["agent"], "correlation_agent")
+        self.assertEqual(findings[3]["agent"], "report_agent")
 
+    @patch("internal.client.go_backend.GoBackendClient.submit_report")
+    @patch("internal.client.go_backend.GoBackendClient.post_finding")
+    @patch("internal.client.go_backend.GoBackendClient._request")
+    @patch("internal.client.go_backend.GoBackendClient.create_incident")
+    @patch("internal.client.go_backend.GoBackendClient.get_services")
+    @patch("internal.client.go_backend.GoBackendClient.get_health")
     @patch("internal.client.go_backend.GoBackendClient.get_logs")
     @patch("internal.client.go_backend.GoBackendClient.search_runbooks")
-    def test_log_agent_degradation_timeout(self, mock_search, mock_get_logs):
+    def test_log_agent_degradation_timeout(self, mock_search, mock_get_logs,
+                                            mock_health, mock_services,
+                                            mock_create_incident, mock_request,
+                                            mock_post_finding, mock_submit_report):
+        # Supervisor mocks
+        mock_health.return_value = {"status": "ok", "components": {}}
+        mock_services.return_value = {"services": []}
+        mock_create_incident.return_value = {"incident_id": "inc-test-002", "status": "open"}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"incidents": [], "pagination": {}}
+        mock_request.return_value = mock_resp
+        mock_post_finding.return_value = {"finding_id": "f-1", "stored_at": "now"}
+        mock_submit_report.return_value = {"report_id": "r-1", "stored_at": "now"}
+
         # get_logs raises BackendTimeoutError (504)
         orig_exc = Exception("Connection timeout")
         mock_get_logs.side_effect = BackendTimeoutError(504, "Gateway Timeout", orig_exc)
@@ -168,7 +207,8 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         # Verify workflow continued to RAG and completed
         self.assertEqual(result.get("status"), "completed")
         findings = result.get("findings", [])
-        self.assertEqual(len(findings), 2)
+        # 4 findings: degraded log + runbook + correlation + report
+        self.assertEqual(len(findings), 4)
 
         # Finding 0: degraded from log_query_agent
         self.assertEqual(findings[0]["agent"], "log_query_agent")
@@ -182,15 +222,34 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         self.assertEqual(findings[1]["agent"], "rag_agent")
         self.assertEqual(findings[1]["type"], "runbook")
 
-        # Verify events
+        # Verify events include degraded entry
         events = result.get("incident_events", [])
-        self.assertEqual(len(events), 2)
+        self.assertGreaterEqual(len(events), 2)
         self.assertEqual(events[0]["event_type"], "degraded")
         self.assertEqual(events[0]["source"], "log_query_agent")
 
+    @patch("internal.client.go_backend.GoBackendClient.submit_report")
+    @patch("internal.client.go_backend.GoBackendClient.post_finding")
+    @patch("internal.client.go_backend.GoBackendClient._request")
+    @patch("internal.client.go_backend.GoBackendClient.create_incident")
+    @patch("internal.client.go_backend.GoBackendClient.get_services")
+    @patch("internal.client.go_backend.GoBackendClient.get_health")
     @patch("internal.client.go_backend.GoBackendClient.get_logs")
     @patch("internal.client.go_backend.GoBackendClient.search_runbooks")
-    def test_rag_agent_degradation_not_found(self, mock_search, mock_get_logs):
+    def test_rag_agent_degradation_not_found(self, mock_search, mock_get_logs,
+                                              mock_health, mock_services,
+                                              mock_create_incident, mock_request,
+                                              mock_post_finding, mock_submit_report):
+        # Supervisor mocks
+        mock_health.return_value = {"status": "ok", "components": {}}
+        mock_services.return_value = {"services": []}
+        mock_create_incident.return_value = {"incident_id": "inc-test-003", "status": "open"}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"incidents": [], "pagination": {}}
+        mock_request.return_value = mock_resp
+        mock_post_finding.return_value = {"finding_id": "f-1", "stored_at": "now"}
+        mock_submit_report.return_value = {"report_id": "r-1", "stored_at": "now"}
+
         # get_logs is normal
         mock_get_logs.return_value = {
             "logs": [{"id": "log-1", "severity": "ERROR", "message": "Connection timeout", "trace_id": "tr-123"}]
@@ -208,7 +267,8 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         # Verify workflow completed successfully with degraded RAG
         self.assertEqual(result.get("status"), "completed")
         findings = result.get("findings", [])
-        self.assertEqual(len(findings), 2)
+        # 4 findings: log_anomaly + degraded_rag + correlation + report
+        self.assertEqual(len(findings), 4)
 
         # Finding 0: normal log_anomaly from log_query_agent
         self.assertEqual(findings[0]["agent"], "log_query_agent")
@@ -222,14 +282,33 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         self.assertEqual(findings[1]["evidence"]["status_code"], 404)
         self.assertEqual(findings[1]["evidence"]["backend"], "mock-go-backend")
 
-        # Verify events
+        # Verify events include rag degraded entry
         events = result.get("incident_events", [])
-        self.assertEqual(events[1]["event_type"], "degraded")
-        self.assertEqual(events[1]["source"], "rag_agent")
+        rag_degraded_events = [e for e in events if e.get("source") == "rag_agent" and e.get("event_type") == "degraded"]
+        self.assertEqual(len(rag_degraded_events), 1)
 
+    @patch("internal.client.go_backend.GoBackendClient.submit_report")
+    @patch("internal.client.go_backend.GoBackendClient.post_finding")
+    @patch("internal.client.go_backend.GoBackendClient._request")
+    @patch("internal.client.go_backend.GoBackendClient.create_incident")
+    @patch("internal.client.go_backend.GoBackendClient.get_services")
+    @patch("internal.client.go_backend.GoBackendClient.get_health")
     @patch("internal.client.go_backend.GoBackendClient.get_logs")
     @patch("internal.client.go_backend.GoBackendClient.search_runbooks")
-    def test_rag_agent_degradation_server_error(self, mock_search, mock_get_logs):
+    def test_rag_agent_degradation_server_error(self, mock_search, mock_get_logs,
+                                                 mock_health, mock_services,
+                                                 mock_create_incident, mock_request,
+                                                 mock_post_finding, mock_submit_report):
+        # Supervisor mocks
+        mock_health.return_value = {"status": "ok", "components": {}}
+        mock_services.return_value = {"services": []}
+        mock_create_incident.return_value = {"incident_id": "inc-test-004", "status": "open"}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"incidents": [], "pagination": {}}
+        mock_request.return_value = mock_resp
+        mock_post_finding.return_value = {"finding_id": "f-1", "stored_at": "now"}
+        mock_submit_report.return_value = {"report_id": "r-1", "stored_at": "now"}
+
         # get_logs is normal
         mock_get_logs.return_value = {
             "logs": [{"id": "log-1", "severity": "ERROR", "message": "Connection timeout", "trace_id": "tr-123"}]
@@ -247,7 +326,8 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         # Verify workflow completed successfully with degraded RAG
         self.assertEqual(result.get("status"), "completed")
         findings = result.get("findings", [])
-        self.assertEqual(len(findings), 2)
+        # 4 findings: log_anomaly + degraded_rag + correlation + report
+        self.assertEqual(len(findings), 4)
 
         # Finding 1: degraded from rag_agent
         self.assertEqual(findings[1]["agent"], "rag_agent")

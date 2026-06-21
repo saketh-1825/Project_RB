@@ -9,6 +9,10 @@ class AnalysisState(TypedDict, total=False):
     status: str
     report: Optional[dict]
     
+    # Topology and correlation fields
+    services_topology: Optional[dict]
+    correlation: Optional[dict]
+
     # RAG/Incident specific fields
     incident_title: str
     incident_summary: str

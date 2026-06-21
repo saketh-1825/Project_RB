@@ -37,22 +37,26 @@ def run_test():
     print(f"Incident events count: {len(incident_events)}")
     
     # Assertions based on test requirements:
-    # 1. findings count = 2
+    # 1. findings count = 4 (log_query + rag + correlation + report)
     # 2. findings[0]["agent"] = "log_query_agent"
     # 3. findings[1]["agent"] = "rag_agent"
-    # 4. incident_events length >= 2
+    # 4. incident_events length >= 4
     
     errors = []
-    if len(findings) != 2:
-        errors.append(f"Expected exactly 2 findings, got {len(findings)}")
+    if len(findings) != 4:
+        errors.append(f"Expected exactly 4 findings, got {len(findings)}")
     else:
         if findings[0].get("agent") != "log_query_agent":
             errors.append(f"Expected findings[0] to be from 'log_query_agent', got '{findings[0].get('agent')}'")
         if findings[1].get("agent") != "rag_agent":
             errors.append(f"Expected findings[1] to be from 'rag_agent', got '{findings[1].get('agent')}'")
+        if findings[2].get("agent") != "correlation_agent":
+            errors.append(f"Expected findings[2] to be from 'correlation_agent', got '{findings[2].get('agent')}'")
+        if findings[3].get("agent") != "report_agent":
+            errors.append(f"Expected findings[3] to be from 'report_agent', got '{findings[3].get('agent')}'")
             
-    if len(incident_events) < 2:
-        errors.append(f"Expected at least 2 incident events, got {len(incident_events)}")
+    if len(incident_events) < 4:
+        errors.append(f"Expected at least 4 incident events, got {len(incident_events)}")
         
     if errors:
         print("\n❌ Test FAILED with following errors:")

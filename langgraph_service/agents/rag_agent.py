@@ -81,8 +81,7 @@ def rag_agent_node(state: AnalysisState) -> AnalysisState:
             state["incident_events"] = []
         state["incident_events"].append(event)
 
-        state["current_agent"] = "rag_agent"
-        state["status"] = "completed"
+        state["current_agent"] = "correlation_agent"
         return state
 
     # Get similarity score of top match
@@ -144,8 +143,7 @@ def rag_agent_node(state: AnalysisState) -> AnalysisState:
             except Exception:
                 pass
 
-    state["current_agent"] = "rag_agent"
-    state["status"] = "completed"
+    state["current_agent"] = "correlation_agent"
     state["awaiting_human"] = False
     
     return state

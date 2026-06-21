@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS service_dependencies;
+DROP TABLE IF EXISTS services;
+DROP TABLE IF EXISTS spans;
+DROP TABLE IF EXISTS metric_data;
+DROP TABLE IF EXISTS metric_catalog;
+DROP TABLE IF EXISTS logs;

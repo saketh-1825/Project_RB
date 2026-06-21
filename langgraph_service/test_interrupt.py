@@ -32,7 +32,37 @@ def mock_search_runbooks(self, query: str, *args, **kwargs):
         }
     ]
 
+def mock_get_health(self):
+    return {"status": "ok", "components": {}, "uptime_seconds": 3600}
+
+def mock_get_services(self):
+    return {"services": [], "generated_at": "2026-03-29T10:05:00.000Z"}
+
+def mock_create_incident(self, data):
+    return {"incident_id": "inc-interrupt-001", "title": "Test", "status": "open", "opened_at": "now"}
+
+def mock_post_finding(self, incident_id, finding):
+    return {"finding_id": "f-mock", "stored_at": "now"}
+
+def mock_submit_report(self, incident_id, report):
+    return {"report_id": "r-mock", "stored_at": "now"}
+
+_original_request = GoBackendClient._request
+def mock_request_for_incidents(self, method, path, **kwargs):
+    """Mock _request to return empty incidents list for correlation agent"""
+    if "/api/v1/incidents" in path and method == "GET":
+        resp = MagicMock()
+        resp.json.return_value = {"incidents": [], "pagination": {}}
+        return resp
+    return _original_request(self, method, path, **kwargs)
+
 GoBackendClient.search_runbooks = mock_search_runbooks
+GoBackendClient.get_health = mock_get_health
+GoBackendClient.get_services = mock_get_services
+GoBackendClient.create_incident = mock_create_incident
+GoBackendClient.post_finding = mock_post_finding
+GoBackendClient.submit_report = mock_submit_report
+GoBackendClient._request = mock_request_for_incidents
 
 # Import FastAPI test client
 from fastapi.testclient import TestClient
@@ -105,15 +135,17 @@ class TestHumanInterrupt(unittest.TestCase):
         findings = res_data.get("findings", [])
         events = res_data.get("incident_events", [])
         
-        # Log Query Agent finding + RAG Agent finding = 2
-        self.assertEqual(len(findings), 2)
+        # Log Query Agent finding + RAG Agent finding + correlation + report = 4
+        self.assertEqual(len(findings), 4)
         self.assertEqual(findings[0]["agent"], "log_query_agent")
         self.assertEqual(findings[1]["agent"], "rag_agent")
         self.assertEqual(findings[1]["type"], "runbook")
         self.assertEqual(findings[1]["runbook_id"], "RB-100")
+        self.assertEqual(findings[2]["agent"], "correlation_agent")
+        self.assertEqual(findings[3]["agent"], "report_agent")
         
-        # Incident events count = 2
-        self.assertEqual(len(events), 2)
+        # Incident events count = 4
+        self.assertEqual(len(events), 4)
         self.assertEqual(events[0]["source"], "log_query_agent")
         self.assertEqual(events[1]["source"], "rag_agent")
         self.assertEqual(events[1]["event_type"], "runbook_match")

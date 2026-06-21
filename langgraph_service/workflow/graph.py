@@ -4,6 +4,8 @@ from schemas.state import AnalysisState
 from agents.supervisor import supervisor_node
 from agents.log_query_agent import log_query_agent_node
 from agents.rag_agent import rag_agent_node
+from agents.correlation_agent import correlation_agent_node
+from agents.report_agent import report_agent_node
 from internal.redis_client import save_analysis_state
 
 builder = StateGraph(AnalysisState)
@@ -11,12 +13,22 @@ builder = StateGraph(AnalysisState)
 builder.add_node("supervisor", supervisor_node)
 builder.add_node("log_query_agent", log_query_agent_node)
 builder.add_node("rag_agent", rag_agent_node)
+builder.add_node("correlation_agent", correlation_agent_node)
+builder.add_node("report_agent", report_agent_node)
 
 builder.set_entry_point("supervisor")
 
 builder.add_edge("supervisor", "log_query_agent")
 builder.add_edge("log_query_agent", "rag_agent")
-builder.add_edge("rag_agent", END)
+
+def route_after_rag(state: AnalysisState):
+    if state.get("status") == "awaiting_human":
+        return END
+    return "correlation_agent"
+
+builder.add_conditional_edges("rag_agent", route_after_rag)
+builder.add_edge("correlation_agent", "report_agent")
+builder.add_edge("report_agent", END)
 
 graph = builder.compile()
 

@@ -13,6 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"sre-copilot/db"
+	"sre-copilot/middleware"
 )
 
 func main() {
@@ -25,122 +28,105 @@ func main() {
 	}
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
+	// Load configuration
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load configuration")
+	}
+
+	// ── Database Migrations ───────────────────────────────────────────────────
+	if err := db.RunMigrations(cfg.PostgresDSN); err != nil {
+		log.Fatal().Err(err).Msg("database migrations failed")
+	}
+
+	// ── App Init ──────────────────────────────────────────────────────────────
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	app, err := NewApp(ctx, cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize application")
+	}
+	defer app.Close()
+
+	// Start WebSocket Hub in background
+	go app.WSHub.Run()
+
 	// ── Router ────────────────────────────────────────────────────────────────
-	if os.Getenv("ENV") != "development" {
+	if cfg.Env != "development" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// ── Health / readiness ────────────────────────────────────────────────────
-	r.GET("/api/v1/ready", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ready": true})
-	})
-	r.GET("/api/v1/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"components": gin.H{
-				"log_store":    "ok",
-				"metric_store": "ok",
-				"redis":        "ok",
-				"vector_index": "ok",
-			},
-			"uptime_seconds": time.Now().Unix(),
-		})
-	})
+	// Standard Global Middleware
+	r.Use(middleware.RequestID())
+	r.Use(middleware.StructuredLogger())
 
-	// ── Alerts ────────────────────────────────────────────────────────────────
-	alerts := r.Group("/api/v1/alerts")
+	// ── Public Routes (Unauthenticated) ───────────────────────────────────────
+	r.GET("/api/v1/ready", app.SystemHandler.Ready)
+	r.GET("/api/v1/health", app.SystemHandler.Health)
+
+	// WebSocket Endpoint
+	r.GET("/ws", app.WSHub.HandleWebSocket)
+
+	// ── Authenticated API Routes ──────────────────────────────────────────────
+	api := r.Group("/api/v1")
+	api.Use(middleware.BearerAuth(cfg.SREInternalToken))
 	{
-		alerts.GET("", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"alerts": []gin.H{}, "pagination": gin.H{"total": 0}})
-		})
-		alerts.GET("/:id", func(c *gin.Context) {
-			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "ALERT_NOT_FOUND", "message": "not found"}})
-		})
-		alerts.POST("/:id/acknowledge", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"acknowledged": true, "alert_id": c.Param("id")})
-		})
+		// Alerts
+		api.GET("/alerts", app.AlertHandler.List)
+		api.GET("/alerts/:alert_id", app.AlertHandler.GetByID)
+		api.POST("/alerts/:alert_id/acknowledge", app.AlertHandler.Acknowledge)
+		api.POST("/alerts/:alert_id/suppress", app.AlertHandler.Suppress)
+
+		// Logs
+		api.GET("/logs", app.LogHandler.Query)
+		api.GET("/logs/anomalies", app.LogHandler.Anomalies)
+		api.GET("/logs/:log_id", app.LogHandler.GetByID)
+
+		// Metrics
+		api.GET("/metrics/query", app.MetricHandler.Query)
+		api.POST("/metrics/query/batch", app.MetricHandler.BatchQuery)
+		api.GET("/metrics/summary", app.MetricHandler.Summary)
+		api.GET("/metrics/catalog", app.MetricHandler.Catalog)
+
+		// Traces
+		api.GET("/traces/:trace_id", app.TraceHandler.GetByTraceID)
+		api.GET("/traces", app.TraceHandler.Search)
+
+		// Services
+		api.GET("/services", app.ServiceHandler.List)
+		api.GET("/services/:service_id/health", app.ServiceHandler.GetHealth)
+
+		// Runbooks
+		api.GET("/runbooks", app.RunbookHandler.List)
+		api.GET("/runbooks/search", app.RunbookHandler.Search)
+		api.GET("/runbooks/:runbook_id", app.RunbookHandler.GetByID)
+		api.POST("/runbooks", app.RunbookHandler.Create)
+
+		// Incidents
+		api.GET("/incidents", app.IncidentHandler.List)
+		api.POST("/incidents", app.IncidentHandler.Create)
+		api.GET("/incidents/:incident_id", app.IncidentHandler.GetByID)
+		api.PATCH("/incidents/:incident_id", app.IncidentHandler.Update)
+		api.POST("/incidents/:incident_id/events", app.IncidentHandler.AddEvent)
+		api.POST("/incidents/:incident_id/report", app.IncidentHandler.AddReport)
 	}
 
-	// ── Logs ─────────────────────────────────────────────────────────────────
-	logsGroup := r.Group("/api/v1/logs")
+	// ── Webhooks (Signature HMAC Authenticated) ──────────────────────────────
+	webhooks := r.Group("/webhooks")
 	{
-		logsGroup.GET("", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"logs": []gin.H{}, "total_matched": 0})
-		})
-		logsGroup.GET("/anomalies", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"anomalous_windows": []gin.H{}})
-		})
-		logsGroup.GET("/:id", func(c *gin.Context) {
-			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "LOG_NOT_FOUND"}})
-		})
+		webhooks.POST("/prometheus", middleware.HMACAuth(cfg.PrometheusWebhookSecret), app.WebhookHandler.Prometheus)
+		webhooks.POST("/datadog", middleware.HMACAuth(cfg.DatadogWebhookSecret), app.WebhookHandler.Datadog)
+		webhooks.POST("/custom", middleware.BearerAuth(cfg.SREInternalToken), app.WebhookHandler.Custom)
 	}
-
-	// ── Metrics ───────────────────────────────────────────────────────────────
-	metrics := r.Group("/api/v1/metrics")
-	{
-		metrics.GET("/catalog", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"metrics": []gin.H{}})
-		})
-		metrics.GET("/query", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"data_points": []gin.H{}})
-		})
-		metrics.POST("/query/batch", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"series": []gin.H{}, "errors": []string{}})
-		})
-		metrics.GET("/summary", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"min": 0, "max": 0, "avg": 0})
-		})
-	}
-
-	// ── Traces ────────────────────────────────────────────────────────────────
-	traces := r.Group("/api/v1/traces")
-	{
-		traces.GET("", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"traces": []gin.H{}, "next_cursor": nil})
-		})
-		traces.GET("/:id", func(c *gin.Context) {
-			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "TRACE_NOT_FOUND"}})
-		})
-	}
-
-	// ── Services ──────────────────────────────────────────────────────────────
-	services := r.Group("/api/v1/services")
-	{
-		services.GET("", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"services": []gin.H{}})
-		})
-		services.GET("/:id/health", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"service_id": c.Param("id"), "health": "unknown"})
-		})
-	}
-
-	// ── Runbooks & Incidents ──────────────────────────────────────────────────
-	r.GET("/api/v1/runbooks", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"runbooks": []gin.H{}})
-	})
-	r.GET("/api/v1/incidents", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"incidents": []gin.H{}})
-	})
-
-	// ── Webhook endpoints (Prometheus / Datadog) ──────────────────────────────
-	r.POST("/webhooks/prometheus", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"received": true})
-	})
-	r.POST("/webhooks/datadog", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"received": true})
-	})
 
 	// ── Server lifecycle ──────────────────────────────────────────────────────
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	srv := &http.Server{Addr: ":" + port, Handler: r}
+	srv := &http.Server{Addr: ":" + cfg.Port, Handler: r}
 
 	go func() {
-		log.Info().Str("port", port).Msg("go-backend starting")
+		log.Info().Str("port", cfg.Port).Msg("go-backend starting")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("server error")
 		}
@@ -150,9 +136,9 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatal().Err(err).Msg("forced shutdown")
 	}
 	log.Info().Msg("go-backend stopped")

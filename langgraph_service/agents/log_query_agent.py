@@ -58,17 +58,20 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
     affected_services = alert.get("affected_services", [])
     fired_at_str = alert.get("fired_at")
     
+    from datetime import timezone
     if fired_at_str:
         clean_time_str = fired_at_str.replace("Z", "+00:00")
         try:
             fired_at = datetime.fromisoformat(clean_time_str)
+            if fired_at.tzinfo is None:
+                fired_at = fired_at.replace(tzinfo=timezone.utc)
         except ValueError:
-            fired_at = datetime.utcnow()
+            fired_at = datetime.now(timezone.utc)
     else:
-        fired_at = datetime.utcnow()
+        fired_at = datetime.now(timezone.utc)
 
-    from_time_str = (fired_at - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
-    to_time_str = fired_at.isoformat().replace("+00:00", "Z")
+    from_time_str = (fired_at - timedelta(minutes=10)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    to_time_str = fired_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # 1. Fetch logs with degradation fallback
     try:

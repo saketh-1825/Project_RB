@@ -1,13 +1,13 @@
 module sre-copilot
 
-go 1.25.0
+go 1.24.0
 
 require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.7.2
 	github.com/rs/zerolog v1.32.0
 )
 
