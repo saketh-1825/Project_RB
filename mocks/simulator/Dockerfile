@@ -1,5 +1,9 @@
-FROM alpine:latest
+FROM python:3.12-alpine
 
-# A dummy simulator that keeps running to satisfy docker compose
-# until the actual simulator code is added.
-CMD ["sh", "-c", "echo 'Simulator mock starting...' && while true; do sleep 60; done"]
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests
+
+COPY simulator.py .
+
+CMD ["python", "-u", "simulator.py"]

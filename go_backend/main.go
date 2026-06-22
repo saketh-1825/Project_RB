@@ -114,6 +114,13 @@ func main() {
 		api.POST("/incidents/:incident_id/report", app.IncidentHandler.AddReport)
 	}
 
+	// ── Internal Endpoints (Service-to-Service, Bearer Authenticated) ─────
+	internal := r.Group("/internal")
+	internal.Use(middleware.BearerAuth(cfg.SREInternalToken))
+	{
+		internal.POST("/logs/ingest", app.LogHandler.Ingest)
+	}
+
 	// ── Webhooks (Signature HMAC Authenticated) ──────────────────────────────
 	webhooks := r.Group("/webhooks")
 	{

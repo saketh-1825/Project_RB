@@ -134,3 +134,41 @@ func (h *LogHandler) GetByID(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, entry)
 }
+
+// Ingest handles POST /internal/logs/ingest — batch log ingestion called by the simulator.
+func (h *LogHandler) Ingest(c *gin.Context) {
+	var req struct {
+		Logs []models.LogEntry `json:"logs" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST", err.Error()))
+		return
+	}
+
+	if len(req.Logs) == 0 {
+		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST", "logs array must not be empty"))
+		return
+	}
+
+	// Cap batch size to prevent memory issues
+	const maxBatchSize = 5000
+	if len(req.Logs) > maxBatchSize {
+		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST",
+			"batch size exceeds maximum of "+strconv.Itoa(maxBatchSize)))
+		return
+	}
+
+	inserted, err := h.store.BulkIngest(c.Request.Context(), req.Logs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":    err.Error(),
+			"inserted": inserted,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"inserted": inserted,
+		"total":    len(req.Logs),
+	})
+}

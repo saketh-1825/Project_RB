@@ -33,6 +33,7 @@ type LogStore interface {
 	GetByID(ctx context.Context, id string) (*models.LogEntry, error)
 	GetAnomalies(ctx context.Context, from, to time.Time, services []string, thresholdMult float64) ([]models.AnomalousWindow, error)
 	Ingest(ctx context.Context, entry *models.LogEntry) error
+	BulkIngest(ctx context.Context, entries []models.LogEntry) (int, error)
 }
 
 type logStore struct {
@@ -249,4 +250,35 @@ func (s *logStore) Ingest(ctx context.Context, e *models.LogEntry) error {
 	return s.pool.QueryRow(ctx, query,
 		e.Timestamp, e.Level, e.Service, e.Host, e.Message, e.TraceID, e.SpanID, e.Attributes,
 	).Scan(&e.ID)
+}
+
+// BulkIngest inserts multiple log entries in a single pgx.Batch round-trip.
+// Returns the number of successfully inserted rows.
+func (s *logStore) BulkIngest(ctx context.Context, entries []models.LogEntry) (int, error) {
+	if len(entries) == 0 {
+		return 0, nil
+	}
+
+	batch := &pgx.Batch{}
+	for _, e := range entries {
+		batch.Queue(
+			`INSERT INTO logs (timestamp, level, service, host, message, trace_id, span_id, attributes)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			e.Timestamp, e.Level, e.Service, e.Host, e.Message, e.TraceID, e.SpanID, e.Attributes,
+		)
+	}
+
+	br := s.pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	inserted := 0
+	for range entries {
+		_, err := br.Exec()
+		if err != nil {
+			return inserted, fmt.Errorf("log.BulkIngest row %d: %w", inserted, err)
+		}
+		inserted++
+	}
+
+	return inserted, nil
 }
