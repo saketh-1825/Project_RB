@@ -12,6 +12,12 @@ class AnalysisState(TypedDict, total=False):
     # Topology and correlation fields
     services_topology: Optional[dict]
     correlation: Optional[dict]
+    time_window: Optional[Dict[str, str]]
+    metrics_data: Optional[Dict[str, Any]]
+    metrics_summary: Optional[Dict[str, Any]]
+    similar_incidents: Optional[List[Dict[str, Any]]]
+    root_cause: Optional[Dict[str, Any]]
+    correlation_finding: Optional[Dict[str, Any]]
 
     # RAG/Incident specific fields
     incident_title: str

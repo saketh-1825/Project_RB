@@ -1,18 +1,41 @@
 import os
-from typing import Any, Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 from schemas.state import AnalysisState
 from internal.client.go_backend import GoBackendClient
 from internal.errors import GoBackendError
-from agents.helpers import build_degraded_finding
+from prompts import load_prompt
+from internal.correlation.engine import (
+    infer_root_cause,
+    find_historical_matches,
+    build_correlation_finding
+)
+
+
+def _get_metric_stats(series: Optional[Dict[str, Any]], scale_to_percentage: bool = False) -> Dict[str, Any]:
+    if not series or not series.get("data_points"):
+        return {"max": 0, "avg": 0}
+    vals = [float(pt["value"]) for pt in series["data_points"] if pt.get("value") is not None]
+    if not vals:
+        return {"max": 0, "avg": 0}
+
+    max_v = max(vals)
+    scale = 100.0 if (scale_to_percentage and max_v <= 1.0) else 1.0
+
+    scaled_vals = [v * scale for v in vals]
+    return {
+        "max": round(max(scaled_vals)),
+        "avg": round(sum(scaled_vals) / len(scaled_vals))
+    }
 
 
 def correlation_agent_node(state: AnalysisState) -> AnalysisState:
     """
     Correlates findings from log_query_agent and rag_agent with
-    historical incidents to identify patterns and probable root cause.
+    metrics and historical incidents to identify probable root cause.
     """
-    # Pass-through if correlation findings already exist (resuming execution)
+    # 0. Pass-through if correlation findings already exist (resuming execution)
     findings = state.get("findings", [])
     if findings:
         correlation_findings = [f for f in findings if f.get("agent") == "correlation_agent"]
@@ -20,154 +43,176 @@ def correlation_agent_node(state: AnalysisState) -> AnalysisState:
             state["current_agent"] = "report_agent"
             return state
 
+    # Load prompt template as requested
+    try:
+        load_prompt("correlation_agent.txt")
+    except Exception:
+        pass
+
     base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
     token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
     client = GoBackendClient(base_url=base_url, token=token)
 
-    # 1. Gather existing findings from upstream agents
-    log_findings = [f for f in findings if f.get("agent") == "log_query_agent"]
-    rag_findings = [f for f in findings if f.get("agent") == "rag_agent"]
-
-    # Extract affected services from state
+    # 1. Read input parameters from state
+    incident_id = state.get("incident_id")
     alert = state.get("alert") or {}
     affected_services = alert.get("affected_services", [])
 
-    # Also extract from services topology if available
-    topology = state.get("services_topology")
-    degraded_services = []
-    if topology and isinstance(topology, dict):
-        for svc in topology.get("services", []):
-            if isinstance(svc, dict) and svc.get("health") in ("degraded", "down"):
-                degraded_services.append(svc.get("name", svc.get("service_id", "")))
+    # Extract time window from state or calculate it
+    time_window = state.get("time_window")
+    from_time_str = None
+    to_time_str = None
+    if time_window and isinstance(time_window, dict):
+        from_time_str = time_window.get("from") or time_window.get("from_time") or time_window.get("start")
+        to_time_str = time_window.get("to") or time_window.get("to_time") or time_window.get("end")
 
-    # 2. Look up past incidents for correlation
+    if not from_time_str or not to_time_str:
+        # Fallback to computing time window from alert fired_at
+        fired_at_str = alert.get("fired_at")
+        if fired_at_str:
+            clean_time_str = fired_at_str.replace("Z", "+00:00")
+            try:
+                fired_at = datetime.fromisoformat(clean_time_str)
+                if fired_at.tzinfo is None:
+                    fired_at = fired_at.replace(tzinfo=timezone.utc)
+            except ValueError:
+                fired_at = datetime.now(timezone.utc)
+        else:
+            fired_at = datetime.now(timezone.utc)
+
+        from_time_str = (fired_at - timedelta(minutes=10)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        to_time_str = fired_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        # Save generated time window in state
+        state["time_window"] = {"from": from_time_str, "to": to_time_str}
+
+    # 2. Call POST /metrics/query/batch
+    metrics_query_failed = False
+    metrics_response = {}
+    try:
+        queries = [
+            {"metric_name": "error_rate", "from": from_time_str, "to": to_time_str},
+            {"metric_name": "cpu", "from": from_time_str, "to": to_time_str},
+            {"metric_name": "memory", "from": from_time_str, "to": to_time_str},
+            {"metric_name": "db_pool_waiting", "from": from_time_str, "to": to_time_str}
+        ]
+        metrics_response = client.query_metrics_batch(queries)
+    except Exception:
+        metrics_query_failed = True
+
+    # 3. Call GET /incidents for the previous 30 days
     similar_past_incidents = []
     try:
-        incidents_resp = client._request("GET", "/api/v1/incidents")
-        incidents_data = incidents_resp.json()
-        past_incidents = incidents_data.get("incidents", [])
+        to_dt = datetime.fromisoformat(to_time_str.replace("Z", "+00:00"))
+        from_30d_str = (to_dt - timedelta(days=30)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        # Find incidents involving the same affected services
-        for past in past_incidents:
-            if not isinstance(past, dict):
-                continue
-            past_services = set(past.get("affected_services", []))
-            current_services = set(affected_services + degraded_services)
-            overlap = past_services & current_services
-            if overlap:
-                similar_past_incidents.append({
-                    "incident_id": past.get("incident_id"),
-                    "title": past.get("title"),
-                    "similarity_score": round(len(overlap) / max(len(current_services), 1), 2),
-                    "resolution": past.get("root_cause_summary", "No resolution recorded")
-                })
-    except (GoBackendError, Exception):
+        incidents_resp = client.get_incidents(from_time=from_30d_str, to_time=to_time_str)
+        past_incidents = incidents_resp.get("incidents", [])
+
+        # Match using the correlation engine
+        similar_past_incidents = find_historical_matches(past_incidents, affected_services)
+    except Exception:
         pass
 
-    # 3. Build correlation analysis
-    root_cause_description = _infer_root_cause(log_findings, rag_findings, degraded_services)
-    confidence = _calculate_confidence(log_findings, rag_findings, similar_past_incidents)
-
-    correlation = {
-        "root_cause": {
-            "description": root_cause_description,
-            "affected_services": list(set(affected_services + degraded_services)),
-            "confidence": confidence,
-        },
-        "similar_past_incidents": similar_past_incidents,
-        "degraded_services": degraded_services,
-    }
-    state["correlation"] = correlation
-
-    # 4. Build finding
-    finding = {
-        "agent": "correlation_agent",
-        "type": "historical_correlation",
-        "severity": "high" if confidence >= 0.7 else "medium",
-        "title": "Root cause correlation analysis",
-        "summary": root_cause_description,
-        "confidence": confidence,
-        "evidence": {
-            "similar_past_incidents": [p.get("incident_id") for p in similar_past_incidents],
-            "degraded_services": degraded_services,
-            "log_finding_count": len(log_findings),
-            "runbook_match_count": len(rag_findings),
+    # 4. Ingest and calculate root cause or handle degraded mode
+    if metrics_query_failed:
+        # Create degraded finding as specified
+        correlation_finding = {
+            "agent": "correlation_agent",
+            "type": "historical_correlation",
+            "severity": "high",
+            "title": "Root Cause Correlation Analysis: DEGRADED",
+            "summary": "Metrics endpoint unavailable",
+            "confidence": 0.2,
+            "reason": "METRIC_QUERY_FAILED",
+            "evidence": {
+                "metric_names": ["error_rate", "cpu", "memory", "db_pool_waiting"],
+                "time_range": {"from": from_time_str, "to": to_time_str}
+            },
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         }
-    }
 
+        root_cause = {
+            "type": "UNKNOWN",
+            "description": "Metrics query failed",
+            "confidence": 0.2,
+            "affected_services": affected_services,
+            "supporting_metrics": []
+        }
+        metrics_data = {}
+        metrics_summary = {}
+    else:
+        # Process metrics using the correlation engine
+        series_list = metrics_response.get("series", []) if metrics_response else []
+        metrics_data = {s.get("metric_name"): s for s in series_list if isinstance(s, dict)}
+
+        # Also support full contract name mapping
+        for m_name in list(metrics_data.keys()):
+            if m_name == "http_error_rate":
+                metrics_data["error_rate"] = metrics_data[m_name]
+            elif m_name == "process_cpu_usage":
+                metrics_data["cpu"] = metrics_data[m_name]
+            elif m_name == "process_memory_bytes":
+                metrics_data["memory"] = metrics_data[m_name]
+            elif m_name == "db_pool_waiting_connections":
+                metrics_data["db_pool_waiting"] = metrics_data[m_name]
+
+        root_cause = infer_root_cause(metrics_data, affected_services)
+
+        # Calculate metrics summary
+        error_rate_stats = _get_metric_stats(metrics_data.get("error_rate"), scale_to_percentage=True)
+        metrics_summary = {
+            "cpu": _get_metric_stats(metrics_data.get("cpu"), scale_to_percentage=True),
+            "memory": _get_metric_stats(metrics_data.get("memory"), scale_to_percentage=True),
+            "error_rate": {"max": error_rate_stats["max"]}
+        }
+
+        time_range = {"from": from_time_str, "to": to_time_str}
+        correlation_finding = build_correlation_finding(
+            root_cause=root_cause,
+            metric_names=["error_rate", "cpu", "memory", "db_pool_waiting"],
+            time_range=time_range
+        )
+
+    # 5. Store in state
+    state["metrics_data"] = metrics_data
+    state["metrics_summary"] = metrics_summary
+    state["similar_incidents"] = similar_past_incidents
+    state["root_cause"] = root_cause
+    state["correlation_finding"] = correlation_finding
+
+    # Ensure findings list is populated
     if "findings" not in state or not isinstance(state["findings"], list):
         state["findings"] = []
-    state["findings"].append(finding)
+    state["findings"].append(correlation_finding)
 
-    # Build event
+    # Maintain backward compatibility with report_agent.py
+    state["correlation"] = {
+        "root_cause": {
+            "description": correlation_finding.get("summary", "Correlation analysis completed."),
+            "affected_services": affected_services,
+            "confidence": correlation_finding.get("confidence", 0.3),
+        },
+        "similar_past_incidents": similar_past_incidents
+    }
+
     event = {
         "source": "correlation_agent",
-        "event_type": "historical_correlation",
-        "message": f"Correlation analysis completed — confidence {confidence}",
-        "details": finding
+        "event_type": "degraded" if metrics_query_failed else "historical_correlation",
+        "message": f"Correlation analysis completed — confidence {correlation_finding.get('confidence', 0.3)}",
+        "details": correlation_finding
     }
     if "incident_events" not in state or not isinstance(state["incident_events"], list):
         state["incident_events"] = []
     state["incident_events"].append(event)
 
-    # Post finding to backend
-    incident_id = state.get("incident_id")
+    # 6. POST the finding to /incidents/{incident_id}/events
     if incident_id:
         try:
-            client.post_finding(incident_id, finding)
+            client.post_finding(incident_id, correlation_finding)
         except Exception:
             pass
 
+    # 7. Advance current agent
     state["current_agent"] = "report_agent"
     return state
-
-
-def _infer_root_cause(
-    log_findings: List[Dict[str, Any]],
-    rag_findings: List[Dict[str, Any]],
-    degraded_services: List[str]
-) -> str:
-    """Build a root cause description from available evidence."""
-    parts = []
-
-    # Use log findings for error context
-    for f in log_findings:
-        if f.get("type") == "log_anomaly":
-            parts.append(f"Error spike detected: {f.get('summary', 'unknown errors')}")
-
-    # Use runbook matches for resolution context
-    for f in rag_findings:
-        if f.get("type") == "runbook":
-            parts.append(f"Matched runbook: {f.get('title', 'unknown runbook')}")
-
-    # Use degraded services
-    if degraded_services:
-        parts.append(f"Degraded services: {', '.join(degraded_services)}")
-
-    if not parts:
-        return "Insufficient evidence to determine root cause"
-
-    return "; ".join(parts)
-
-
-def _calculate_confidence(
-    log_findings: List[Dict[str, Any]],
-    rag_findings: List[Dict[str, Any]],
-    similar_incidents: List[Dict[str, Any]]
-) -> float:
-    """Calculate confidence score based on available evidence."""
-    score = 0.3  # Base confidence
-
-    # Boost for log anomaly evidence
-    if any(f.get("type") == "log_anomaly" for f in log_findings):
-        score += 0.25
-
-    # Boost for runbook match
-    if any(f.get("type") == "runbook" for f in rag_findings):
-        score += 0.2
-
-    # Boost for similar past incidents
-    if similar_incidents:
-        score += min(0.25, 0.1 * len(similar_incidents))
-
-    return round(min(score, 1.0), 2)

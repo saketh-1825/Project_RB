@@ -251,8 +251,51 @@ class GoBackendClient:
         return response.json()
 
     # ---------------------------------------------------
+    # METRICS
+    # ---------------------------------------------------
+
+    def query_metrics_batch(
+        self,
+        queries: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        response = self._request(
+            "POST",
+            "/api/v1/metrics/query/batch",
+            json={"queries": queries}
+        )
+        return response.json()
+
+    # ---------------------------------------------------
     # INCIDENTS
     # ---------------------------------------------------
+
+    def get_incidents(
+        self,
+        from_time: Optional[str] = None,
+        to_time: Optional[str] = None,
+        service: Optional[str] = None,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "page": page,
+            "page_size": page_size
+        }
+        if from_time:
+            params["from"] = from_time
+        if to_time:
+            params["to"] = to_time
+        if service:
+            params["service"] = service
+        if severity:
+            params["severity"] = severity
+        if status:
+            params["status"] = status
+
+        response = self._request("GET", "/api/v1/incidents", params=params)
+        return response.json()
 
     def create_incident(
         self,
