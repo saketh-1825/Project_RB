@@ -116,3 +116,30 @@ func (c *LangGraphClient) CheckHealth(ctx context.Context) (*HealthResponse, err
 	}
 	return &result, nil
 }
+
+// SendInterrupt forwards a human response to LangGraph POST /api/v1/analyses/:id/interrupt,
+// resuming a paused analysis that is awaiting human context.
+func (c *LangGraphClient) SendInterrupt(ctx context.Context, analysisID, humanResponse string) error {
+	payload := map[string]string{"response": humanResponse}
+	body, _ := json.Marshal(payload)
+
+	url := fmt.Sprintf("%s/api/v1/analyses/%s/interrupt", c.BaseURL, analysisID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("langgraph: SendInterrupt build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.Token)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("langgraph: SendInterrupt request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("langgraph: SendInterrupt status %d for analysis %s", resp.StatusCode, analysisID)
+	}
+	return nil
+}
+

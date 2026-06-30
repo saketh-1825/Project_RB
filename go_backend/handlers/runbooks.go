@@ -1,25 +1,32 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 
+	"sre-copilot/clients"
 	"sre-copilot/db"
 	"sre-copilot/models"
 )
 
 // RunbookHandler handles /api/v1/runbooks endpoints.
 type RunbookHandler struct {
-	store db.RunbookStore
+	store    db.RunbookStore
+	embedder *clients.EmbedderClient
 }
 
-func NewRunbookHandler(store db.RunbookStore) *RunbookHandler {
-	return &RunbookHandler{store: store}
+func NewRunbookHandler(store db.RunbookStore, embedder *clients.EmbedderClient) *RunbookHandler {
+	return &RunbookHandler{store: store, embedder: embedder}
 }
 
-// Search handles GET /runbooks/search — semantic search over runbooks.
+// Search handles GET /runbooks/search — cosine similarity search when an embedder
+// is configured; falls back to full-text ts_rank otherwise.
 func (h *RunbookHandler) Search(c *gin.Context) {
 	q := c.Query("q")
 	if q == "" {
@@ -27,13 +34,35 @@ func (h *RunbookHandler) Search(c *gin.Context) {
 		return
 	}
 	topK, _ := strconv.Atoi(c.DefaultQuery("top_k", "5"))
+	serviceFilter := c.Query("service_filter")
+	tagFilter := c.Query("tag_filter")
 
-	runbooks, err := h.store.Search(c.Request.Context(), q, topK,
-		c.Query("service_filter"), c.Query("tag_filter"))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
-		return
+	var runbooks []models.Runbook
+
+	// Try vector search if embedder is available
+	if h.embedder != nil && h.embedder.Enabled() {
+		vec, err := h.embedder.Embed(c.Request.Context(), q)
+		if err != nil {
+			log.Warn().Err(err).Msg("embedder.Embed failed, falling back to FTS")
+		} else if len(vec) > 0 {
+			runbooks, err = h.store.SearchByVector(c.Request.Context(), vec, topK, serviceFilter, tagFilter)
+			if err != nil {
+				log.Warn().Err(err).Msg("SearchByVector failed, falling back to FTS")
+				runbooks = nil
+			}
+		}
 	}
+
+	// FTS fallback
+	if runbooks == nil {
+		var err error
+		runbooks, err = h.store.Search(c.Request.Context(), q, topK, serviceFilter, tagFilter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
+			return
+		}
+	}
+
 	if runbooks == nil {
 		runbooks = []models.Runbook{}
 	}
@@ -78,7 +107,7 @@ func (h *RunbookHandler) List(c *gin.Context) {
 	})
 }
 
-// Create handles POST /runbooks — ingest a new runbook.
+// Create handles POST /runbooks — store content, trigger async embedding pipeline.
 func (h *RunbookHandler) Create(c *gin.Context) {
 	var req struct {
 		Title    string   `json:"title" binding:"required"`
@@ -108,5 +137,33 @@ func (h *RunbookHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
 		return
 	}
+
+	// Async embedding pipeline: generate vector and store it
+	if h.embedder != nil && h.embedder.Enabled() {
+		runbookID := rb.RunbookID
+		content := req.Title + "\n\n" + req.Content
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			vec, err := h.embedder.Embed(ctx, content)
+			if err != nil {
+				log.Error().Err(err).Str("runbook_id", runbookID).Msg("embedding failed")
+				return
+			}
+			if len(vec) == 0 {
+				return
+			}
+			if err := h.store.UpdateEmbedding(ctx, runbookID, vec); err != nil {
+				log.Error().Err(err).Str("runbook_id", runbookID).Msg("UpdateEmbedding failed")
+				return
+			}
+			log.Info().Str("runbook_id", runbookID).Int("dims", len(vec)).Msg("embedding stored")
+		}()
+	}
+
 	c.JSON(http.StatusCreated, rb)
 }
+
+// errResp is already defined in helpers.go — see that file.
+var _ = fmt.Sprintf // keep fmt imported

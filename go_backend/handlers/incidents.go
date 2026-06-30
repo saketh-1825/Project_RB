@@ -3,21 +3,42 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"sre-copilot/db"
 	"sre-copilot/models"
+	"sre-copilot/ws"
 )
+
+// validAgents is the set of accepted agent names from LangGraph.
+var validAgents = map[string]bool{
+	"supervisor":          true,
+	"log_query_agent":     true,
+	"rag_agent":           true,
+	"correlation_agent":   true,
+	"report_agent":        true,
+}
+
+// validSeverities is the set of accepted finding severity values.
+var validSeverities = map[string]bool{
+	"critical": true,
+	"high":     true,
+	"medium":   true,
+	"low":      true,
+	"info":     true,
+}
 
 // IncidentHandler handles /api/v1/incidents endpoints.
 type IncidentHandler struct {
 	store db.IncidentStore
+	hub   *ws.Hub
 }
 
-func NewIncidentHandler(store db.IncidentStore) *IncidentHandler {
-	return &IncidentHandler{store: store}
+func NewIncidentHandler(store db.IncidentStore, hub *ws.Hub) *IncidentHandler {
+	return &IncidentHandler{store: store, hub: hub}
 }
 
 // List handles GET /incidents — list historical incidents.
@@ -103,6 +124,7 @@ func (h *IncidentHandler) GetByID(c *gin.Context) {
 }
 
 // Update handles PATCH /incidents/:incident_id — update incident fields.
+// If the body contains an "analysis" key, broadcasts analysis.agent_switched.
 func (h *IncidentHandler) Update(c *gin.Context) {
 	var req map[string]interface{}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -110,8 +132,7 @@ func (h *IncidentHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Only allow specific fields to be updated
-	allowed := map[string]bool{"title": true, "severity": true, "status": true, "resolved_at": true, "affected_services": true}
+	allowed := map[string]bool{"title": true, "severity": true, "status": true, "resolved_at": true, "affected_services": true, "analysis": true}
 	fields := make(map[string]interface{})
 	for k, v := range req {
 		if allowed[k] {
@@ -119,22 +140,42 @@ func (h *IncidentHandler) Update(c *gin.Context) {
 		}
 	}
 
-	if len(fields) == 0 {
-		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST", "no valid fields to update"))
-		return
+	// analysis is metadata only — don't write it to the DB column (not a real column)
+	delete(fields, "analysis")
+
+	// Write actual DB fields
+	dbFields := make(map[string]interface{})
+	for k, v := range fields {
+		dbFields[k] = v
 	}
 
-	if err := h.store.Update(c.Request.Context(), c.Param("incident_id"), fields); err != nil {
-		c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
-		return
+	if len(dbFields) > 0 {
+		if err := h.store.Update(c.Request.Context(), c.Param("incident_id"), dbFields); err != nil {
+			c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
+			return
+		}
 	}
+
+	incidentID := c.Param("incident_id")
+
+	// Broadcast analysis.agent_switched when LangGraph sends an agent transition
+	if analysisData, ok := req["analysis"]; ok {
+		if h.hub != nil {
+			h.hub.BroadcastToIncident(incidentID, "analysis.agent_switched", gin.H{
+				"incident_id": incidentID,
+				"analysis":    analysisData,
+			})
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"incident_id": c.Param("incident_id"),
+		"incident_id": incidentID,
 		"updated_at":  time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
-// AddEvent handles POST /incidents/:incident_id/events — stream findings.
+// AddEvent handles POST /incidents/:incident_id/events — stream findings from LangGraph.
+// Validates the finding payload schema before persisting.
 func (h *IncidentHandler) AddEvent(c *gin.Context) {
 	var finding models.Finding
 	if err := c.ShouldBindJSON(&finding); err != nil {
@@ -142,9 +183,54 @@ func (h *IncidentHandler) AddEvent(c *gin.Context) {
 		return
 	}
 
-	if err := h.store.AddEvent(c.Request.Context(), c.Param("incident_id"), &finding); err != nil {
+	// ── Schema validation ─────────────────────────────────────────────────────
+	var validationErrors []string
+
+	if finding.Agent == "" {
+		validationErrors = append(validationErrors, "agent is required")
+	} else if !validAgents[strings.ToLower(string(finding.Agent))] {
+		validationErrors = append(validationErrors, "agent must be one of: supervisor, log_query_agent, rag_agent, correlation_agent, report_agent")
+	}
+
+	if finding.Type == "" {
+		validationErrors = append(validationErrors, "type is required")
+	}
+	if finding.Title == "" {
+		validationErrors = append(validationErrors, "title is required")
+	}
+	if finding.Summary == "" {
+		validationErrors = append(validationErrors, "summary is required")
+	}
+
+	if string(finding.Severity) != "" && !validSeverities[strings.ToLower(string(finding.Severity))] {
+		validationErrors = append(validationErrors, "severity must be one of: critical, high, medium, low, info")
+	}
+
+	if finding.Confidence < 0.0 || finding.Confidence > 1.0 {
+		validationErrors = append(validationErrors, "confidence must be between 0.0 and 1.0")
+	}
+
+	if len(validationErrors) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"code":    "FINDING_INVALID",
+				"message": "finding payload failed schema validation",
+				"fields":  validationErrors,
+			},
+			"request_id": c.GetString("request_id"),
+		})
+		return
+	}
+
+	incidentID := c.Param("incident_id")
+	if err := h.store.AddEvent(c.Request.Context(), incidentID, &finding); err != nil {
 		c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
 		return
+	}
+
+	// Broadcast analysis.finding to incident room subscribers
+	if h.hub != nil {
+		h.hub.BroadcastToIncident(incidentID, "analysis.finding", finding)
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -161,10 +247,19 @@ func (h *IncidentHandler) AddReport(c *gin.Context) {
 		return
 	}
 
-	report.IncidentID = c.Param("incident_id")
-	if err := h.store.AddReport(c.Request.Context(), c.Param("incident_id"), &report); err != nil {
+	incidentID := c.Param("incident_id")
+	report.IncidentID = incidentID
+	if err := h.store.AddReport(c.Request.Context(), incidentID, &report); err != nil {
 		c.JSON(http.StatusInternalServerError, errResp(c, "INTERNAL_ERROR", err.Error()))
 		return
+	}
+
+	// Broadcast analysis.completed to incident room subscribers
+	if h.hub != nil {
+		h.hub.BroadcastToIncident(incidentID, "analysis.completed", gin.H{
+			"incident_id": incidentID,
+			"report_id":   report.ReportID,
+		})
 	}
 
 	c.JSON(http.StatusCreated, gin.H{

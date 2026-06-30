@@ -3,6 +3,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -11,6 +12,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+
+	"sre-copilot/clients"
+)
+
+const (
+	// pingInterval is how often the server sends a WebSocket ping frame.
+	pingInterval = 10 * time.Second
+	// pongWait is how long to wait for a pong before dropping the connection.
+	pongWait = 15 * time.Second
+	// writeWait is the maximum time allowed to write a message to the client.
+	writeWait = 10 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -27,10 +39,9 @@ type Message struct {
 
 // Client represents a single WebSocket connection.
 type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
-	send chan []byte
-	// Incidents this client is subscribed to for granular updates
+	hub           *Hub
+	conn          *websocket.Conn
+	send          chan []byte
 	subscriptions map[string]bool
 	mu            sync.RWMutex
 }
@@ -42,21 +53,25 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	mu         sync.RWMutex
+
+	// LangGraph client for forwarding human_input events
+	LangGraph *clients.LangGraphClient
 }
 
 // NewHub creates a new WebSocket hub.
-func NewHub() *Hub {
+func NewHub(langGraph *clients.LangGraphClient) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		LangGraph:  langGraph,
 	}
 }
 
 // Run starts the hub's event loop. Call this in a goroutine.
 func (h *Hub) Run() {
-	ticker := time.NewTicker(30 * time.Second) // ping interval
+	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -89,7 +104,7 @@ func (h *Hub) Run() {
 			h.mu.RUnlock()
 
 		case <-ticker.C:
-			// Send ping to all clients
+			// Broadcast server-time ping to keep connections alive
 			h.BroadcastEvent("ping", map[string]interface{}{
 				"server_time": time.Now().UTC().Format(time.RFC3339Nano),
 			})
@@ -160,21 +175,25 @@ func (h *Hub) HandleWebSocket(c *gin.Context) {
 }
 
 // readPump reads messages from the client (subscribe, unsubscribe, human_input, pong).
+// Drops the connection if no pong is received within pongWait.
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
 
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
 	for {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Warn().Err(err).Msg("ws: unexpected close")
+			}
 			break
 		}
 
@@ -190,8 +209,10 @@ func (c *Client) readPump() {
 					c.mu.Lock()
 					c.subscriptions[id] = true
 					c.mu.Unlock()
+					log.Info().Str("incident_id", id).Msg("ws: client subscribed to incident")
 				}
 			}
+
 		case "unsubscribe.incident":
 			if payload, ok := msg.Payload.(map[string]interface{}); ok {
 				if id, ok := payload["incident_id"].(string); ok {
@@ -200,16 +221,41 @@ func (c *Client) readPump() {
 					c.mu.Unlock()
 				}
 			}
+
+		case "human_input":
+			// Forward to LangGraph interrupt endpoint
+			if c.hub.LangGraph == nil {
+				break
+			}
+			payload, ok := msg.Payload.(map[string]interface{})
+			if !ok {
+				break
+			}
+			analysisID, _ := payload["analysis_id"].(string)
+			response, _ := payload["response"].(string)
+			if analysisID == "" || response == "" {
+				break
+			}
+			go func(aID, resp string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				if err := c.hub.LangGraph.SendInterrupt(ctx, aID, resp); err != nil {
+					log.Error().Err(err).Str("analysis_id", aID).Msg("ws: SendInterrupt failed")
+				} else {
+					log.Info().Str("analysis_id", aID).Msg("ws: human_input forwarded to LangGraph")
+				}
+			}(analysisID, response)
+
 		case "pong":
-			// Keepalive acknowledged
-			c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		}
 	}
 }
 
 // writePump sends messages from the hub to the client.
+// Sends a WebSocket ping frame every pingInterval; drops the connection on write error.
 func (c *Client) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(pingInterval)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
@@ -218,16 +264,17 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case msg, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
+
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

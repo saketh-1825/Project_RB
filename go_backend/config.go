@@ -11,6 +11,7 @@ type Config struct {
 	Env                     string
 	PostgresDSN             string
 	RedisURL                string
+	EmbedderURL             string // Optional: async pgvector embedding service
 	ChromaURL               string
 	ChromaToken             string
 	LangGraphURL            string
@@ -27,6 +28,7 @@ func LoadConfig() (*Config, error) {
 		Env:                     getEnv("ENV", "development"),
 		PostgresDSN:             os.Getenv("POSTGRES_DSN"),
 		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379"),
+		EmbedderURL:             getEnv("EMBEDDER_URL", ""),
 		ChromaURL:               getEnv("CHROMA_URL", "http://localhost:8001"),
 		ChromaToken:             os.Getenv("CHROMA_TOKEN"),
 		LangGraphURL:            getEnv("LANGGRAPH_URL", "http://localhost:9000"),

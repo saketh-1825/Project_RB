@@ -11,16 +11,59 @@ import (
 	"sre-copilot/clients"
 	"sre-copilot/db"
 	"sre-copilot/models"
+	"sre-copilot/ws"
 )
 
 // WebhookHandler handles /webhooks/* endpoints.
 type WebhookHandler struct {
 	alertStore db.AlertStore
 	langGraph  *clients.LangGraphClient
+	retryQueue *clients.RetryQueue
+	hub        *ws.Hub
 }
 
-func NewWebhookHandler(alertStore db.AlertStore, langGraph *clients.LangGraphClient) *WebhookHandler {
-	return &WebhookHandler{alertStore: alertStore, langGraph: langGraph}
+func NewWebhookHandler(
+	alertStore db.AlertStore,
+	langGraph *clients.LangGraphClient,
+	retryQueue *clients.RetryQueue,
+	hub *ws.Hub,
+) *WebhookHandler {
+	return &WebhookHandler{
+		alertStore: alertStore,
+		langGraph:  langGraph,
+		retryQueue: retryQueue,
+		hub:        hub,
+	}
+}
+
+// triggerAnalysis calls LangGraph and broadcasts WS events. Falls back to
+// the retry queue when LangGraph is unreachable.
+func (h *WebhookHandler) triggerAnalysis(ctx context.Context, a *models.Alert) {
+	req := clients.TriggerAnalysisRequest{
+		AlertID:     a.AlertID,
+		Alert:       *a,
+		TriggeredAt: time.Now(),
+	}
+
+	resp, err := h.langGraph.TriggerAnalysis(ctx, req)
+	if err != nil {
+		log.Error().Err(err).Str("alert_id", a.AlertID).Msg("LangGraph unreachable, enqueueing for retry")
+		if h.retryQueue != nil {
+			if qErr := h.retryQueue.Enqueue(ctx, req, 0); qErr != nil {
+				log.Error().Err(qErr).Msg("retryQueue.Enqueue failed")
+			}
+		}
+		return
+	}
+
+	log.Info().Str("alert_id", a.AlertID).Str("analysis_id", resp.AnalysisID).Msg("LangGraph analysis triggered")
+
+	if h.hub != nil {
+		h.hub.BroadcastEvent("analysis.started", gin.H{
+			"alert_id":    a.AlertID,
+			"analysis_id": resp.AnalysisID,
+		})
+	}
 }
 
 // ─── Prometheus Alertmanager ─────────────────────────────────────────────────
@@ -50,25 +93,21 @@ func (h *WebhookHandler) Prometheus(c *gin.Context) {
 
 	processed := 0
 	for _, promAlert := range payload.Alerts {
-		// Convert Prometheus alert to internal Alert format
 		firedAt, _ := time.Parse(time.RFC3339, promAlert.StartsAt)
 		if firedAt.IsZero() {
 			firedAt = time.Now()
 		}
 
-		// Extract alert name from labels
 		name := "unknown"
 		if v, ok := promAlert.Labels["alertname"]; ok {
 			name = v.(string)
 		}
 
-		// Map severity from labels or default to "medium"
 		severity := models.SeverityMedium
 		if v, ok := promAlert.Labels["severity"]; ok {
 			severity = models.Severity(v.(string))
 		}
 
-		// Extract affected services
 		var services []string
 		if v, ok := promAlert.Labels["service"]; ok {
 			services = []string{v.(string)}
@@ -93,20 +132,14 @@ func (h *WebhookHandler) Prometheus(c *gin.Context) {
 		}
 		processed++
 
+		// Broadcast alert.fired to all WS subscribers
+		if h.hub != nil {
+			h.hub.BroadcastEvent("alert.fired", alert)
+		}
+
 		// Trigger LangGraph analysis for firing alerts
 		if promAlert.Status == "firing" {
-			go func(a *models.Alert) {
-				_, err := h.langGraph.TriggerAnalysis(context.Background(), clients.TriggerAnalysisRequest{
-					AlertID:     a.AlertID,
-					Alert:       *a,
-					TriggeredAt: time.Now(),
-				})
-				if err != nil {
-					log.Error().Err(err).Str("alert_id", a.AlertID).Msg("failed to trigger LangGraph analysis")
-				} else {
-					log.Info().Str("alert_id", a.AlertID).Msg("LangGraph analysis triggered")
-				}
-			}(alert)
+			go h.triggerAnalysis(context.Background(), alert)
 		}
 	}
 
@@ -139,7 +172,6 @@ func (h *WebhookHandler) Datadog(c *gin.Context) {
 		return
 	}
 
-	// Map Datadog priority to internal severity
 	severityMap := map[string]models.Severity{
 		"P1": models.SeverityCritical,
 		"P2": models.SeverityHigh,
@@ -183,18 +215,13 @@ func (h *WebhookHandler) Datadog(c *gin.Context) {
 		return
 	}
 
-	// Trigger analysis for firing alerts
+	// Broadcast alert.fired
+	if h.hub != nil {
+		h.hub.BroadcastEvent("alert.fired", alert)
+	}
+
 	if status == "firing" {
-		go func() {
-			_, err := h.langGraph.TriggerAnalysis(context.Background(), clients.TriggerAnalysisRequest{
-				AlertID:     alert.AlertID,
-				Alert:       *alert,
-				TriggeredAt: time.Now(),
-			})
-			if err != nil {
-				log.Error().Err(err).Str("alert_id", alert.AlertID).Msg("failed to trigger LangGraph analysis")
-			}
-		}()
+		go h.triggerAnalysis(context.Background(), alert)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"received": true})
@@ -232,20 +259,13 @@ func (h *WebhookHandler) Custom(c *gin.Context) {
 		return
 	}
 
-	// Trigger LangGraph analysis for firing alerts
+	// Broadcast alert.fired
+	if h.hub != nil {
+		h.hub.BroadcastEvent("alert.fired", &alert)
+	}
+
 	if alert.Status == "firing" {
-		go func(a *models.Alert) {
-			_, err := h.langGraph.TriggerAnalysis(context.Background(), clients.TriggerAnalysisRequest{
-				AlertID:     a.AlertID,
-				Alert:       *a,
-				TriggeredAt: time.Now(),
-			})
-			if err != nil {
-				log.Error().Err(err).Str("alert_id", a.AlertID).Msg("failed to trigger LangGraph analysis")
-			} else {
-				log.Info().Str("alert_id", a.AlertID).Msg("LangGraph analysis triggered")
-			}
-		}(&alert)
+		go h.triggerAnalysis(context.Background(), &alert)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

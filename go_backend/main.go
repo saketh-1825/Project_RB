@@ -49,8 +49,8 @@ func main() {
 	}
 	defer app.Close()
 
-	// Start WebSocket Hub in background
-	go app.WSHub.Run()
+	// Start WebSocket Hub and background workers (Redis retry queue etc.)
+	app.StartBackgroundWorkers(ctx)
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	if cfg.Env != "development" {
