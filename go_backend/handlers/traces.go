@@ -21,7 +21,7 @@ func NewTraceHandler(store db.TraceStore) *TraceHandler {
 	return &TraceHandler{store: store}
 }
 
-// GetByTraceID handles GET /traces/:trace_id — fetch all spans for a trace.
+// GetByTraceID handles GET /traces/:trace_id — fetch all spans and build the ordered tree.
 func (h *TraceHandler) GetByTraceID(c *gin.Context) {
 	traceID := c.Param("trace_id")
 	spans, err := h.store.GetByTraceID(c.Request.Context(), traceID)
@@ -34,7 +34,7 @@ func (h *TraceHandler) GetByTraceID(c *gin.Context) {
 		return
 	}
 
-	// Compute total duration and root service
+	// Compute total duration and root service from span set
 	var rootService string
 	var totalDuration float64
 	if len(spans) > 0 {
@@ -46,6 +46,7 @@ func (h *TraceHandler) GetByTraceID(c *gin.Context) {
 			if end.After(maxEnd) {
 				maxEnd = end
 			}
+			// Root span has no parent
 			if sp.ParentSpanID == nil {
 				rootService = sp.Service
 			}
@@ -61,7 +62,7 @@ func (h *TraceHandler) GetByTraceID(c *gin.Context) {
 	})
 }
 
-// Search handles GET /traces — search traces by service, time range, status.
+// Search handles GET /traces — search traces by service/status/min_duration with cursor pagination.
 func (h *TraceHandler) Search(c *gin.Context) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
@@ -74,11 +75,11 @@ func (h *TraceHandler) Search(c *gin.Context) {
 	to, _ := time.Parse(time.RFC3339, toStr)
 
 	f := db.TraceFilter{
-		From:     from,
-		To:       to,
-		Service:  c.Query("service"),
-		Status:   c.Query("status"),
-		Cursor:   c.Query("cursor"),
+		From:    from,
+		To:      to,
+		Service: c.Query("service"),
+		Status:  c.Query("status"),
+		Cursor:  c.Query("cursor"),
 	}
 	f.PageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "50"))
 
@@ -100,5 +101,49 @@ func (h *TraceHandler) Search(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"traces":      traces,
 		"next_cursor": nextCursor,
+	})
+}
+
+// Ingest handles POST /internal/traces/ingest — batch span ingestion called by the simulator/agents.
+func (h *TraceHandler) Ingest(c *gin.Context) {
+	var req struct {
+		Spans []models.Span `json:"spans" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST", err.Error()))
+		return
+	}
+	if len(req.Spans) == 0 {
+		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST", "spans array must not be empty"))
+		return
+	}
+
+	const maxBatchSize = 2000
+	if len(req.Spans) > maxBatchSize {
+		c.JSON(http.StatusBadRequest, errResp(c, "BAD_REQUEST",
+			"batch size exceeds maximum of "+strconv.Itoa(maxBatchSize)))
+		return
+	}
+
+	// Default zero timestamps to now
+	now := time.Now().UTC()
+	for i := range req.Spans {
+		if req.Spans[i].StartTime.IsZero() {
+			req.Spans[i].StartTime = now
+		}
+	}
+
+	inserted, err := h.store.BulkIngest(c.Request.Context(), req.Spans)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":    err.Error(),
+			"inserted": inserted,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"inserted": inserted,
+		"total":    len(req.Spans),
 	})
 }

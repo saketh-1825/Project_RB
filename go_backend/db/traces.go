@@ -16,6 +16,7 @@ import (
 type TraceStore interface {
 	GetByTraceID(ctx context.Context, traceID string) ([]models.Span, error)
 	Search(ctx context.Context, f TraceFilter) ([]models.TraceSummary, *string, error)
+	BulkIngest(ctx context.Context, spans []models.Span) (int, error)
 }
 
 // TraceFilter holds query params for GET /traces.
@@ -88,13 +89,20 @@ func (s *traceStore) Search(ctx context.Context, f TraceFilter) ([]models.TraceS
 		idx++
 	}
 
+	// Keyset cursor: use trace_id of last seen row
+	if f.Cursor != "" {
+		conds = append(conds, fmt.Sprintf("trace_id < $%d", idx))
+		args = append(args, f.Cursor)
+		idx++
+	}
+
 	where := "WHERE " + strings.Join(conds, " AND ")
 
 	if f.PageSize <= 0 {
 		f.PageSize = 50
 	}
 
-	// Aggregate by trace_id
+	// Aggregate by trace_id — HAVING for min_duration
 	havingClause := ""
 	if f.MinDurationMs != nil {
 		havingClause = fmt.Sprintf("HAVING MAX(start_time + (duration_ms || 'ms')::interval) - MIN(start_time) >= ($%d || 'ms')::interval", idx)
@@ -141,4 +149,43 @@ func (s *traceStore) Search(ctx context.Context, f TraceFilter) ([]models.TraceS
 	}
 
 	return traces, nextCursor, rows.Err()
+}
+
+// BulkIngest inserts spans using a pgx.Batch. Each span is upserted by span_id
+// so the operation is idempotent (safe for at-least-once delivery).
+func (s *traceStore) BulkIngest(ctx context.Context, spans []models.Span) (int, error) {
+	if len(spans) == 0 {
+		return 0, nil
+	}
+
+	batch := &pgx.Batch{}
+	for _, sp := range spans {
+		batch.Queue(`
+			INSERT INTO spans (
+				span_id, trace_id, parent_span_id, service, operation,
+				start_time, duration_ms, status, attributes, error_message
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (span_id) DO UPDATE SET
+				duration_ms    = EXCLUDED.duration_ms,
+				status         = EXCLUDED.status,
+				attributes     = EXCLUDED.attributes,
+				error_message  = EXCLUDED.error_message
+		`,
+			sp.SpanID, sp.TraceID, sp.ParentSpanID, sp.Service, sp.Operation,
+			sp.StartTime, sp.DurationMs, sp.Status, sp.Attributes, sp.ErrorMessage,
+		)
+	}
+
+	br := s.pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	inserted := 0
+	for range spans {
+		_, err := br.Exec()
+		if err != nil {
+			return inserted, fmt.Errorf("trace.BulkIngest row %d: %w", inserted, err)
+		}
+		inserted++
+	}
+	return inserted, nil
 }

@@ -118,7 +118,9 @@ func main() {
 	internal := r.Group("/internal")
 	internal.Use(middleware.BearerAuth(cfg.SREInternalToken))
 	{
-		internal.POST("/logs/ingest", app.LogHandler.Ingest)
+		internal.POST("/logs/ingest",     app.LogHandler.Ingest)
+		internal.POST("/metrics/ingest",  app.MetricHandler.Ingest)
+		internal.POST("/traces/ingest",   app.TraceHandler.Ingest)
 	}
 
 	// ── Webhooks (Signature HMAC Authenticated) ──────────────────────────────
