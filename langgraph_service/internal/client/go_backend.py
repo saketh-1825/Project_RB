@@ -320,6 +320,19 @@ class GoBackendClient:
         )
         return response.json()
 
+    def patch_incident(
+        self,
+        incident_id: str,
+        data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+
+        response = self._request(
+            "PATCH",
+            f"/api/v1/incidents/{incident_id}",
+            json=data
+        )
+        return response.json()
+
     def post_finding(
         self,
         incident_id: str,
