@@ -4,9 +4,7 @@ from langgraph.graph import StateGraph, END
 from schemas.state import AnalysisState
 
 from agents.supervisor import supervisor_node
-from agents.log_query_agent import log_query_agent_node
-from agents.rag_agent import rag_agent_node
-from agents.correlation_agent import correlation_agent_node
+from agents.evidence_agent import evidence_agent_node
 from agents.report_agent import report_agent_node
 from internal.redis_client import save_analysis_state
 from internal.client.go_backend import GoBackendClient
@@ -35,31 +33,26 @@ def wrap_node(agent_name: str, node_func):
 builder = StateGraph(AnalysisState)
 
 builder.add_node("supervisor", wrap_node("supervisor", supervisor_node))
-builder.add_node("log_query_agent", wrap_node("log_query_agent", log_query_agent_node))
-builder.add_node("rag_agent", wrap_node("rag_agent", rag_agent_node))
-builder.add_node("correlation_agent", wrap_node("correlation_agent", correlation_agent_node))
+builder.add_node("evidence_agent", wrap_node("evidence_agent", evidence_agent_node))
 builder.add_node("report_agent", wrap_node("report_agent", report_agent_node))
 
 # Intentionally mirrors the linear workflow to explicitly map a waiting node to its predecessor
 PREVIOUS_NODE = {
-    "log_query_agent": "supervisor",
-    "rag_agent": "log_query_agent",
-    "correlation_agent": "rag_agent",
-    "report_agent": "correlation_agent"
+    "evidence_agent": "supervisor",
+    "rag_agent": "supervisor",
+    "report_agent": "evidence_agent"
 }
 
 builder.set_entry_point("supervisor")
 
-builder.add_edge("supervisor", "log_query_agent")
-builder.add_edge("log_query_agent", "rag_agent")
+builder.add_edge("supervisor", "evidence_agent")
 
-def route_after_rag(state: AnalysisState):
+def route_after_evidence(state: AnalysisState):
     if state.get("status") == "awaiting_human":
         return END
-    return "correlation_agent"
+    return "report_agent"
 
-builder.add_conditional_edges("rag_agent", route_after_rag)
-builder.add_edge("correlation_agent", "report_agent")
+builder.add_conditional_edges("evidence_agent", route_after_evidence)
 builder.add_edge("report_agent", END)
 
 from langgraph.checkpoint.memory import MemorySaver
