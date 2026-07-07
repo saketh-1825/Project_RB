@@ -18,6 +18,8 @@ class AnalysisState(TypedDict, total=False):
     similar_incidents: Optional[List[Dict[str, Any]]]
     root_cause: Optional[Dict[str, Any]]
     correlation_finding: Optional[Dict[str, Any]]
+    evidence: Optional[dict]
+    backend_health: Optional[str]
 
     # RAG/Incident specific fields
     incident_title: str

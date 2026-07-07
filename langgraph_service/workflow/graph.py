@@ -5,6 +5,7 @@ from schemas.state import AnalysisState
 
 from agents.supervisor import supervisor_node
 from agents.evidence_agent import evidence_agent_node
+from agents.correlation_agent import correlation_agent_node
 from agents.report_agent import report_agent_node
 from internal.redis_client import save_analysis_state
 from internal.client.go_backend import GoBackendClient
@@ -30,17 +31,32 @@ def wrap_node(agent_name: str, node_func):
         return node_func(state)
     return wrapper
 
+def human_review_node(state: AnalysisState) -> AnalysisState:
+    """
+    Sets human review fields on AnalysisState for low-confidence routing.
+    """
+    state["status"] = "awaiting_human"
+    state["awaiting_human"] = True
+    state["waiting_at"] = "confidence_review"
+    state["interrupt_type"] = "confidence_review"
+    state["interrupt_question"] = "Confidence score is below threshold. Please review the collected evidence and provide context."
+    return state
+
 builder = StateGraph(AnalysisState)
 
 builder.add_node("supervisor", wrap_node("supervisor", supervisor_node))
 builder.add_node("evidence_agent", wrap_node("evidence_agent", evidence_agent_node))
+builder.add_node("correlation_agent", wrap_node("correlation_agent", correlation_agent_node))
 builder.add_node("report_agent", wrap_node("report_agent", report_agent_node))
+builder.add_node("human_review", wrap_node("human_review", human_review_node))
 
-# Intentionally mirrors the linear workflow to explicitly map a waiting node to its predecessor
+# Intentionally mirrors the workflow to explicitly map a waiting node to its predecessor
 PREVIOUS_NODE = {
     "evidence_agent": "supervisor",
     "rag_agent": "supervisor",
-    "report_agent": "evidence_agent"
+    "correlation_agent": "evidence_agent",
+    "confidence_review": "correlation_agent",
+    "report_agent": "correlation_agent"
 }
 
 builder.set_entry_point("supervisor")
@@ -50,10 +66,23 @@ builder.add_edge("supervisor", "evidence_agent")
 def route_after_evidence(state: AnalysisState):
     if state.get("status") == "awaiting_human":
         return END
-    return "report_agent"
+    return "correlation_agent"
+
+def confidence_router(state: AnalysisState):
+    """
+    Pure routing function deciding between report generation and human review.
+    """
+    if state.get("backend_health") == "unavailable":
+        return "report_agent"
+    confidence = state.get("correlation", {}).get("confidence", {}).get("score", 0.0)
+    if confidence >= 0.75:
+        return "report_agent"
+    return "human_review"
 
 builder.add_conditional_edges("evidence_agent", route_after_evidence)
+builder.add_conditional_edges("correlation_agent", confidence_router)
 builder.add_edge("report_agent", END)
+builder.add_edge("human_review", END)
 
 from langgraph.checkpoint.memory import MemorySaver
 

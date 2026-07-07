@@ -6,8 +6,7 @@ from typing import Dict, Any
 from schemas.state import AnalysisState
 from agents.log_query_agent import log_query_agent_node
 from agents.rag_agent import rag_agent_node
-from agents.correlation_agent import correlation_agent_node
-from agents.helpers import collect_topology_data
+from agents.helpers import collect_topology_data, collect_metrics_data
 from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -27,9 +26,10 @@ async def collect_rag(state: AnalysisState) -> AnalysisState:
     state_copy = copy.deepcopy(state)
     return await asyncio.to_thread(rag_agent_node, state_copy)
 
-async def collect_metrics(state: AnalysisState) -> AnalysisState:
-    state_copy = copy.deepcopy(state)
-    return await asyncio.to_thread(correlation_agent_node, state_copy)
+async def collect_metrics(state: AnalysisState) -> Dict[str, Any]:
+    alert = state.get("alert") or {}
+    time_window = state.get("time_window")
+    return await asyncio.to_thread(collect_metrics_data, alert, time_window)
 
 async def collect_topology(state: AnalysisState) -> Dict[str, Any]:
     if state.get("services_topology") is not None:
@@ -52,6 +52,7 @@ def evidence_agent_node(state: AnalysisState) -> AnalysisState:
     building a unified evidence object and maintaining backward compatibility.
     """
     logger.info("Executing Evidence Orchestration Layer...")
+    alert = state.get("alert") or {}
     
     # 1. Run independent collectors concurrently
     results = run_async(orchestrate_evidence(state))
@@ -145,30 +146,49 @@ def evidence_agent_node(state: AnalysisState) -> AnalysisState:
             state["interrupt_question"] = rag_res.get("interrupt_question")
 
     # 3. METRICS
-    if handle_result(metrics_res, "metrics", "correlation_agent"):
+    if handle_result(metrics_res, "metrics"):
+        metrics_response = metrics_res.get("metrics_response") or {}
+        series_list = metrics_response.get("series", []) if metrics_response else []
+        metrics_data = {s.get("metric_name"): s for s in series_list if isinstance(s, dict)}
+        for m_name in list(metrics_data.keys()):
+            if m_name == "http_error_rate":
+                metrics_data["error_rate"] = metrics_data[m_name]
+            elif m_name == "process_cpu_usage":
+                metrics_data["cpu"] = metrics_data[m_name]
+            elif m_name == "process_memory_bytes":
+                metrics_data["memory"] = metrics_data[m_name]
+            elif m_name == "db_pool_waiting_connections":
+                metrics_data["db_pool_waiting"] = metrics_data[m_name]
+
+        from agents.correlation_agent import _get_metric_stats
+        from internal.correlation.engine import infer_root_cause
+
+        root_cause = infer_root_cause(metrics_data, alert.get("affected_services", []))
+        error_rate_stats = _get_metric_stats(metrics_data.get("error_rate"), scale_to_percentage=True)
+        metrics_summary = {
+            "cpu": _get_metric_stats(metrics_data.get("cpu"), scale_to_percentage=True),
+            "memory": _get_metric_stats(metrics_data.get("memory"), scale_to_percentage=True),
+            "error_rate": {"max": error_rate_stats["max"]}
+        }
+
         evidence["metrics"] = {
-            "metrics_data": metrics_res.get("metrics_data"),
-            "metrics_summary": metrics_res.get("metrics_summary"),
-            "similar_incidents": metrics_res.get("similar_incidents"),
-            "root_cause": metrics_res.get("root_cause")
+            "metrics_query_failed": metrics_res.get("metrics_query_failed"),
+            "metrics_response": metrics_response,
+            "similar_past_incidents": metrics_res.get("similar_past_incidents"),
+            "metrics_data": metrics_data,
+            "metrics_summary": metrics_summary,
+            "similar_incidents": metrics_res.get("similar_past_incidents"),
+            "root_cause": root_cause
         }
         # Merge back to primary state for backward compatibility
-        state["metrics_data"] = metrics_res.get("metrics_data")
-        state["metrics_summary"] = metrics_res.get("metrics_summary")
-        state["similar_incidents"] = metrics_res.get("similar_incidents")
-        state["root_cause"] = metrics_res.get("root_cause")
-        state["correlation_finding"] = metrics_res.get("correlation_finding")
-        state["correlation"] = metrics_res.get("correlation")
-        
-        # Merge metrics findings and events
-        metrics_findings = [f for f in metrics_res.get("findings", []) if f.get("agent") == "correlation_agent"]
-        metrics_events = [e for e in metrics_res.get("incident_events", []) if e.get("source") == "correlation_agent"]
-        for f in metrics_findings:
-            if f not in state["findings"]:
-                state["findings"].append(f)
-        for e in metrics_events:
-            if e not in state["incident_events"]:
-                state["incident_events"].append(e)
+        state["metrics_data"] = metrics_data
+        state["metrics_summary"] = metrics_summary
+        state["similar_incidents"] = metrics_res.get("similar_past_incidents")
+        state["root_cause"] = root_cause
+
+        # Set time_window if present
+        if metrics_res.get("time_window"):
+            state["time_window"] = metrics_res.get("time_window")
 
     # 4. TOPOLOGY
     if handle_result(topology_res, "topology"):

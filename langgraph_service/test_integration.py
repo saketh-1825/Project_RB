@@ -191,10 +191,23 @@ class TestFullGraphTraversal(unittest.TestCase):
         mock_post_finding.return_value = MOCK_FINDING_POSTED
         mock_submit_report.return_value = MOCK_REPORT_POSTED
 
-        # For correlation agent's GET /incidents call
-        mock_incidents_resp = MagicMock()
-        mock_incidents_resp.json.return_value = MOCK_INCIDENTS_LIST
-        mock_request.return_value = mock_incidents_resp
+        # For correlation agent's calls: GET /incidents and POST /metrics/query/batch
+        def mock_request_side_effect(method, path, **kwargs):
+            resp = MagicMock()
+            if "/metrics/query/batch" in path:
+                resp.json.return_value = {
+                    "series": [
+                        {
+                            "metric_name": "http_error_rate",
+                            "unit": "ratio",
+                            "data_points": [{"timestamp": "2026-03-29T10:04:00.000Z", "value": 0.85, "labels": {"service": "payment-api"}}]
+                        }
+                    ]
+                }
+            else:
+                resp.json.return_value = MOCK_INCIDENTS_LIST
+            return resp
+        mock_request.side_effect = mock_request_side_effect
 
         # Build initial state from a realistic alert payload
         initial_state = {
