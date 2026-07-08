@@ -31,20 +31,13 @@ def wrap_node(agent_name: str, node_func):
         return node_func(state)
     return wrapper
 
-def human_review_node(state: AnalysisState) -> AnalysisState:
-    """
-    Sets human review fields on AnalysisState for low-confidence routing.
-    """
-    state["status"] = "awaiting_human"
-    state["awaiting_human"] = True
-    state["waiting_at"] = "confidence_review"
-    state["interrupt_type"] = "confidence_review"
-    state["interrupt_question"] = "Confidence score is below threshold. Please review the collected evidence and provide context."
-    return state
+from internal.analysis_coordinator import detect_and_link_related_analyses
+from agents.human_review_agent import human_review_node
 
 builder = StateGraph(AnalysisState)
 
 builder.add_node("supervisor", wrap_node("supervisor", supervisor_node))
+builder.add_node("analysis_coordinator", wrap_node("analysis_coordinator", detect_and_link_related_analyses))
 builder.add_node("evidence_agent", wrap_node("evidence_agent", evidence_agent_node))
 builder.add_node("correlation_agent", wrap_node("correlation_agent", correlation_agent_node))
 builder.add_node("report_agent", wrap_node("report_agent", report_agent_node))
@@ -55,13 +48,15 @@ PREVIOUS_NODE = {
     "evidence_agent": "supervisor",
     "rag_agent": "supervisor",
     "correlation_agent": "evidence_agent",
-    "confidence_review": "correlation_agent",
+    "confidence_review": "evidence_agent",   # Resume from confidence_review runs correlation_agent next
     "report_agent": "correlation_agent"
 }
 
 builder.set_entry_point("supervisor")
 
-builder.add_edge("supervisor", "evidence_agent")
+# Route through Analysis Coordinator to detect overlapping alerts before evidence collection
+builder.add_edge("supervisor", "analysis_coordinator")
+builder.add_edge("analysis_coordinator", "evidence_agent")
 
 def route_after_evidence(state: AnalysisState):
     if state.get("status") == "awaiting_human":
@@ -83,6 +78,7 @@ builder.add_conditional_edges("evidence_agent", route_after_evidence)
 builder.add_conditional_edges("correlation_agent", confidence_router)
 builder.add_edge("report_agent", END)
 builder.add_edge("human_review", END)
+
 
 from langgraph.checkpoint.memory import MemorySaver
 

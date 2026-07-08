@@ -35,3 +35,11 @@ class AnalysisState(TypedDict, total=False):
     interrupt_question: Optional[str]
     resume_count: int
     last_interrupted_at: Optional[str]
+    
+    # Dedicated Human Review Node fields
+    review_reason: Optional[str]
+    requires_input: Optional[bool]
+    
+    # Analysis Coordinator fields
+    related_analyses: Optional[List[Dict[str, Any]]]
+

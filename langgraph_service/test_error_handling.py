@@ -105,6 +105,7 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
     # Workflow Integration Tests (with Mocked Backend Calls)
     # ---------------------------------------------------
 
+    @patch("agents.correlation_agent.calculate_confidence")
     @patch("internal.client.go_backend.GoBackendClient.submit_report")
     @patch("internal.client.go_backend.GoBackendClient.post_finding")
     @patch("internal.client.go_backend.GoBackendClient._request")
@@ -116,7 +117,9 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
     def test_normal_operation_works_fine(self, mock_search, mock_get_logs,
                                          mock_health, mock_services,
                                          mock_create_incident, mock_request,
-                                         mock_post_finding, mock_submit_report):
+                                         mock_post_finding, mock_submit_report,
+                                         mock_calc_confidence):
+        mock_calc_confidence.return_value = {"score": 1.0, "level": "HIGH", "reason": "Mocked high confidence"}
         # Mimic normal successful backend response
         mock_health.return_value = {"status": "ok", "components": {}}
         mock_services.return_value = {"services": []}
@@ -161,6 +164,7 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         self.assertEqual(findings[2]["agent"], "correlation_agent")
         self.assertEqual(findings[3]["agent"], "report_agent")
 
+    @patch("agents.correlation_agent.calculate_confidence")
     @patch("internal.client.go_backend.GoBackendClient.submit_report")
     @patch("internal.client.go_backend.GoBackendClient.post_finding")
     @patch("internal.client.go_backend.GoBackendClient._request")
@@ -172,7 +176,9 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
     def test_log_agent_degradation_timeout(self, mock_search, mock_get_logs,
                                             mock_health, mock_services,
                                             mock_create_incident, mock_request,
-                                            mock_post_finding, mock_submit_report):
+                                            mock_post_finding, mock_submit_report,
+                                            mock_calc_confidence):
+        mock_calc_confidence.return_value = {"score": 1.0, "level": "HIGH", "reason": "Mocked high confidence"}
         # Supervisor mocks
         mock_health.return_value = {"status": "ok", "components": {}}
         mock_services.return_value = {"services": []}
@@ -228,6 +234,7 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         self.assertEqual(events[0]["event_type"], "degraded")
         self.assertEqual(events[0]["source"], "log_query_agent")
 
+    @patch("agents.correlation_agent.calculate_confidence")
     @patch("internal.client.go_backend.GoBackendClient.submit_report")
     @patch("internal.client.go_backend.GoBackendClient.post_finding")
     @patch("internal.client.go_backend.GoBackendClient._request")
@@ -239,7 +246,9 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
     def test_rag_agent_degradation_not_found(self, mock_search, mock_get_logs,
                                               mock_health, mock_services,
                                               mock_create_incident, mock_request,
-                                              mock_post_finding, mock_submit_report):
+                                              mock_post_finding, mock_submit_report,
+                                              mock_calc_confidence):
+        mock_calc_confidence.return_value = {"score": 1.0, "level": "HIGH", "reason": "Mocked high confidence"}
         # Supervisor mocks
         mock_health.return_value = {"status": "ok", "components": {}}
         mock_services.return_value = {"services": []}
@@ -287,6 +296,7 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
         rag_degraded_events = [e for e in events if e.get("source") == "rag_agent" and e.get("event_type") == "degraded"]
         self.assertEqual(len(rag_degraded_events), 1)
 
+    @patch("agents.correlation_agent.calculate_confidence")
     @patch("internal.client.go_backend.GoBackendClient.submit_report")
     @patch("internal.client.go_backend.GoBackendClient.post_finding")
     @patch("internal.client.go_backend.GoBackendClient._request")
@@ -298,7 +308,9 @@ class TestErrorHandlingAndPrompts(unittest.TestCase):
     def test_rag_agent_degradation_server_error(self, mock_search, mock_get_logs,
                                                  mock_health, mock_services,
                                                  mock_create_incident, mock_request,
-                                                 mock_post_finding, mock_submit_report):
+                                                 mock_post_finding, mock_submit_report,
+                                                 mock_calc_confidence):
+        mock_calc_confidence.return_value = {"score": 1.0, "level": "HIGH", "reason": "Mocked high confidence"}
         # Supervisor mocks
         mock_health.return_value = {"status": "ok", "components": {}}
         mock_services.return_value = {"services": []}

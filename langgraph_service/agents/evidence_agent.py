@@ -103,7 +103,8 @@ def evidence_agent_node(state: AnalysisState) -> AnalysisState:
         return True
 
     # 1. LOGS
-    if handle_result(log_res, "logs", "log_query_agent"):
+    handle_result(log_res, "logs", "log_query_agent")
+    if isinstance(log_res, dict):
         # Extract findings and events belonging to log_query_agent
         log_findings = [f for f in log_res.get("findings", []) if f.get("agent") == "log_query_agent"]
         log_events = [e for e in log_res.get("incident_events", []) if e.get("source") == "log_query_agent"]
@@ -120,7 +121,8 @@ def evidence_agent_node(state: AnalysisState) -> AnalysisState:
                 state["incident_events"].append(e)
 
     # 2. RAG
-    if handle_result(rag_res, "rag", "rag_agent"):
+    handle_result(rag_res, "rag", "rag_agent")
+    if isinstance(rag_res, dict):
         rag_findings = [f for f in rag_res.get("findings", []) if f.get("agent") == "rag_agent"]
         rag_events = [e for e in rag_res.get("incident_events", []) if e.get("source") == "rag_agent"]
         evidence["rag"] = {
@@ -144,6 +146,7 @@ def evidence_agent_node(state: AnalysisState) -> AnalysisState:
             state["waiting_at"] = rag_res.get("waiting_at")
             state["interrupt_type"] = rag_res.get("interrupt_type")
             state["interrupt_question"] = rag_res.get("interrupt_question")
+
 
     # 3. METRICS
     if handle_result(metrics_res, "metrics"):

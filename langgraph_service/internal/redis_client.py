@@ -43,6 +43,9 @@ def save_analysis_state(analysis_id: str, state: Dict[str, Any]) -> None:
     }
 
     r.hset(key, mapping=mapping)
+    # Persist the isolated checkpoint JSON explicitly
+    r.set(f"analysis:{analysis_id}:checkpoint", full_state_serialized)
+
 
 def get_analysis_state(analysis_id: str) -> Optional[Dict[str, Any]]:
     """

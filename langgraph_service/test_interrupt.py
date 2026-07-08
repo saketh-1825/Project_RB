@@ -10,6 +10,16 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Mock search_runbooks on GoBackendClient before importing routes/app
 from internal.client.go_backend import GoBackendClient
 
+# Save original GoBackendClient methods to prevent test pollution
+_orig_search_runbooks = getattr(GoBackendClient, "search_runbooks", None)
+_orig_get_health = getattr(GoBackendClient, "get_health", None)
+_orig_get_services = getattr(GoBackendClient, "get_services", None)
+_orig_create_incident = getattr(GoBackendClient, "create_incident", None)
+_orig_post_finding = getattr(GoBackendClient, "post_finding", None)
+_orig_submit_report = getattr(GoBackendClient, "submit_report", None)
+_orig_request = getattr(GoBackendClient, "_request", None)
+
+
 def mock_search_runbooks(self, query: str, *args, **kwargs):
     print(f"[MOCK] search_runbooks called with query: '{query}'")
     # If the human context is injected, return high similarity score
@@ -56,13 +66,16 @@ def mock_request_for_incidents(self, method, path, **kwargs):
         return resp
     return _original_request(self, method, path, **kwargs)
 
-GoBackendClient.search_runbooks = mock_search_runbooks
-GoBackendClient.get_health = mock_get_health
-GoBackendClient.get_services = mock_get_services
-GoBackendClient.create_incident = mock_create_incident
-GoBackendClient.post_finding = mock_post_finding
-GoBackendClient.submit_report = mock_submit_report
-GoBackendClient._request = mock_request_for_incidents
+def setUpModule():
+    print("[SETUP] Applying GoBackendClient monkeypatches.")
+    GoBackendClient.search_runbooks = mock_search_runbooks
+    GoBackendClient.get_health = mock_get_health
+    GoBackendClient.get_services = mock_get_services
+    GoBackendClient.create_incident = mock_create_incident
+    GoBackendClient.post_finding = mock_post_finding
+    GoBackendClient.submit_report = mock_submit_report
+    GoBackendClient._request = mock_request_for_incidents
+
 
 # Import FastAPI test client
 from fastapi.testclient import TestClient
@@ -203,6 +216,25 @@ class TestHumanInterrupt(unittest.TestCase):
         self.assertFalse(res3.json().get("awaiting_human"))
         self.assertEqual(res3.json().get("resume_count"), 3)
         print("✅ Phase 4 passed successfully! Analysis marked failed when exceeding limit of 2 resumptions.")
+
+def tearDownModule():
+    """Restore original GoBackendClient methods after tests run."""
+    print("[CLEANUP] Restoring original GoBackendClient methods.")
+    if _orig_search_runbooks:
+        GoBackendClient.search_runbooks = _orig_search_runbooks
+    if _orig_get_health:
+        GoBackendClient.get_health = _orig_get_health
+    if _orig_get_services:
+        GoBackendClient.get_services = _orig_get_services
+    if _orig_create_incident:
+        GoBackendClient.create_incident = _orig_create_incident
+    if _orig_post_finding:
+        GoBackendClient.post_finding = _orig_post_finding
+    if _orig_submit_report:
+        GoBackendClient.submit_report = _orig_submit_report
+    if _orig_request:
+        GoBackendClient._request = _orig_request
+
 
 if __name__ == "__main__":
     unittest.main()
