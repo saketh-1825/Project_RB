@@ -54,14 +54,14 @@ async def get_analysis_events(analysis_id: str):
 @app.get("/dashboard/{analysis_id}", response_class=HTMLResponse)
 async def get_dashboard(analysis_id: str):
     """Serves the live interactive SRE Copilot incident analysis timeline dashboard."""
-    html_content = """<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>SRE Copilot - Live Graph Timeline</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
-        :root {
+        :root {{
             --bg-color: #0b0f19;
             --card-bg: rgba(22, 28, 45, 0.6);
             --border-color: rgba(255, 255, 255, 0.08);
@@ -72,15 +72,15 @@ async def get_dashboard(analysis_id: str):
             --status-completed: #10b981;
             --status-failed: #ef4444;
             --status-skipped: #6b7280;
-        }
+        }}
         
-        * {
+        * {{
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-        }
+        }}
         
-        body {
+        body {{
             font-family: 'Outfit', sans-serif;
             background-color: var(--bg-color);
             color: var(--text-primary);
@@ -90,9 +90,9 @@ async def get_dashboard(analysis_id: str):
             align-items: center;
             padding: 40px 20px;
             overflow-y: auto;
-        }
+        }}
 
-        .container {
+        .container {{
             width: 100%;
             max-width: 800px;
             background: var(--card-bg);
@@ -101,26 +101,26 @@ async def get_dashboard(analysis_id: str):
             border-radius: 20px;
             padding: 40px;
             box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        }
+        }}
 
-        header {
+        header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 24px;
             margin-bottom: 32px;
-        }
+        }}
 
-        h1 {
+        h1 {{
             font-size: 28px;
             font-weight: 700;
             background: linear-gradient(135deg, #a78bfa, #6366f1);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-        }
+        }}
 
-        .ws-badge {
+        .ws-badge {{
             font-size: 13px;
             font-weight: 600;
             padding: 6px 14px;
@@ -130,28 +130,28 @@ async def get_dashboard(analysis_id: str):
             gap: 8px;
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid var(--border-color);
-        }
+        }}
 
-        .ws-badge .dot {
+        .ws-badge .dot {{
             width: 8px;
             height: 8px;
             border-radius: 50%;
             background: var(--status-failed);
             transition: background 0.3s;
-        }
+        }}
 
-        .ws-badge.connected .dot {
+        .ws-badge.connected .dot {{
             background: var(--status-completed);
             box-shadow: 0 0 10px var(--status-completed);
-        }
+        }}
 
         /* Timeline Styles */
-        .timeline {
+        .timeline {{
             position: relative;
             padding-left: 32px;
-        }
+        }}
 
-        .timeline::before {
+        .timeline::before {{
             content: '';
             position: absolute;
             left: 7px;
@@ -159,20 +159,20 @@ async def get_dashboard(analysis_id: str):
             bottom: 10px;
             width: 2px;
             background: rgba(255, 255, 255, 0.05);
-        }
+        }}
 
-        .timeline-item {
+        .timeline-item {{
             position: relative;
             margin-bottom: 28px;
             animation: fadeIn 0.4s ease-out forwards;
-        }
+        }}
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(10px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
 
-        .timeline-item::before {
+        .timeline-item::before {{
             content: '';
             position: absolute;
             left: -32px;
@@ -184,26 +184,26 @@ async def get_dashboard(analysis_id: str):
             border: 3px solid var(--status-skipped);
             transition: all 0.3s;
             z-index: 2;
-        }
+        }}
 
         /* Status Colors for Bullets */
-        .timeline-item.running::before {
+        .timeline-item.running::before {{
             border-color: var(--status-running);
             box-shadow: 0 0 8px var(--status-running);
-        }
-        .timeline-item.completed::before {
+        }}
+        .timeline-item.completed::before {{
             border-color: var(--status-completed);
-        }
-        .timeline-item.failed::before {
+        }}
+        .timeline-item.failed::before {{
             border-color: var(--status-failed);
             box-shadow: 0 0 8px var(--status-failed);
-        }
-        .timeline-item.skipped::before {
+        }}
+        .timeline-item.skipped::before {{
             border-color: var(--status-skipped);
             opacity: 0.5;
-        }
+        }}
 
-        .item-content {
+        .item-content {{
             background: rgba(255, 255, 255, 0.02);
             border: 1px solid rgba(255, 255, 255, 0.03);
             border-radius: 12px;
@@ -211,66 +211,66 @@ async def get_dashboard(analysis_id: str):
             display: flex;
             flex-direction: column;
             gap: 8px;
-        }
+        }}
 
-        .item-header {
+        .item-header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
-        }
+        }}
 
-        .node-name {
+        .node-name {{
             font-size: 16px;
             font-weight: 600;
             text-transform: capitalize;
-        }
+        }}
 
-        .status-pill {
+        .status-pill {{
             font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
             padding: 3px 10px;
             border-radius: 6px;
             letter-spacing: 0.5px;
-        }
+        }}
 
-        .status-pill.running { background: rgba(99, 102, 241, 0.15); color: #a5b4fc; }
-        .status-pill.completed { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; }
-        .status-pill.failed { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
-        .status-pill.skipped { background: rgba(107, 114, 128, 0.15); color: #d1d5db; opacity: 0.6; }
+        .status-pill.running {{ background: rgba(99, 102, 241, 0.15); color: #a5b4fc; }}
+        .status-pill.completed {{ background: rgba(16, 185, 129, 0.15); color: #6ee7b7; }}
+        .status-pill.failed {{ background: rgba(239, 68, 68, 0.15); color: #fca5a5; }}
+        .status-pill.skipped {{ background: rgba(107, 114, 128, 0.15); color: #d1d5db; opacity: 0.6; }}
 
-        .time {
+        .time {{
             font-size: 12px;
             color: var(--text-secondary);
-        }
+        }}
 
-        .payload-msg {
+        .payload-msg {{
             font-size: 14px;
             color: #d1d5db;
-        }
+        }}
 
-        .findings-box {
+        .findings-box {{
             background: rgba(0, 0, 0, 0.2);
             border-left: 3px solid #a78bfa;
             padding: 10px 14px;
             border-radius: 0 8px 8px 0;
             margin-top: 4px;
             font-size: 13px;
-        }
+        }}
 
-        .findings-box .source {
+        .findings-box .source {{
             font-weight: 600;
             color: #c084fc;
             text-transform: uppercase;
             font-size: 10px;
             letter-spacing: 0.5px;
             margin-bottom: 2px;
-        }
+        }}
 
-        .findings-box .rc-label {
+        .findings-box .rc-label {{
             color: #f472b6;
             font-weight: 600;
-        }
+        }}
     </style>
 </head>
 <body>
@@ -299,69 +299,69 @@ async def get_dashboard(analysis_id: str):
         const badge = document.getElementById('connection-badge');
         const statusText = document.getElementById('connection-status');
         
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/analysis/${analysisId}`;
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(
+            `ws://${{location.host}}/ws/analysis/${{analysisId}}`
+        );
 
-        ws.onopen = () => {
+        ws.onopen = () => {{
             badge.classList.add('connected');
             statusText.innerText = 'Connected';
             timelineList.innerHTML = '';
-        };
+        }};
 
-        ws.onclose = () => {
+        ws.onclose = () => {{
             badge.classList.remove('connected');
             statusText.innerText = 'Disconnected';
-        };
+        }};
 
-        ws.onmessage = (event) => {
+        ws.onmessage = (event) => {{
             const data = JSON.parse(event.data);
             handleEvent(data);
-        };
+        }};
 
-        function handleEvent(ev) {
+        function handleEvent(ev) {{
             const node = ev.node || 'system';
             const status = ev.status || 'completed';
             const type = ev.event_type;
             const time = new Date(ev.timestamp).toLocaleTimeString();
-            const payload = ev.payload || {};
+            const payload = ev.payload || {{}};
             
-            const existingId = `node-${node}-${status}-${type.replace(/\./g, '-')}`;
+            const existingId = `node-${{node}}-${{status}}-${{type.replace(/\./g, '-')}}`;
             if (document.getElementById(existingId)) return;
 
             const item = document.createElement('div');
             item.id = existingId;
-            item.className = `timeline-item \${status}`;
+            item.className = `timeline-item ${{status}}`;
             
             let payloadHtml = '';
             
-            if (type === 'analysis.finding') {
-                if (payload.root_cause) {
+            if (type === 'analysis.finding') {{
+                if (payload.root_cause) {{
                     payloadHtml = `
                         <div class="findings-box" style="border-left-color: #f472b6;">
                             <div class="source" style="color: #f472b6;">ROOT CAUSE INFERRED</div>
-                            <div><span class="rc-label">Cause:</span> \${payload.root_cause}</div>
-                            <div style="margin-top: 2px;"><span class="rc-label">Confidence:</span> \${(payload.confidence * 100).toFixed(0)}%</div>
+                            <div><span class="rc-label">Cause:</span> ${{payload.root_cause}}</div>
+                            <div style="margin-top: 2px;"><span class="rc-label">Confidence:</span> ${{(payload.confidence * 100).toFixed(0)}}%</div>
                         </div>
                     `;
-                } else {
+                }} else {{
                     payloadHtml = `
                         <div class="findings-box">
-                            <div class="source">Source: \${payload.source}</div>
-                            <div>\${payload.message}</div>
+                            <div class="source">Source: ${{payload.source}}</div>
+                            <div>${{payload.message}}</div>
                         </div>
                     `;
-                }
-            } else {
+                }}
+            }} else {{
                 let msg = payload.message || '';
-                if (payload.error) {
-                    msg += `<div style="color: var(--status-failed); margin-top: 4px; font-family: monospace; font-size: 12px;">Error: \${payload.error}</div>`;
-                }
-                if (payload.data && payload.data.confidence !== undefined) {
-                    msg += ` (Confidence: \${(payload.data.confidence * 100).toFixed(0)}%)`;
-                }
-                payloadHtml = `<div class="payload-msg">\${msg}</div>`;
-            }
+                if (payload.error) {{
+                    msg += `<div style="color: var(--status-failed); margin-top: 4px; font-family: monospace; font-size: 12px;">Error: ${{payload.error}}</div>`;
+                }}
+                if (payload.data && payload.data.confidence !== undefined) {{
+                    msg += ` (Confidence: ${{(payload.data.confidence * 100).toFixed(0)}}%)`;
+                }}
+                payloadHtml = `<div class="payload-msg">${{msg}}</div>`;
+            }}
 
             let nodeTitle = node.replace(/_/g, ' ');
             if (type === 'analysis.started') nodeTitle = 'Analysis Triggered';
@@ -371,17 +371,17 @@ async def get_dashboard(analysis_id: str):
             item.innerHTML = `
                 <div class="item-content">
                     <div class="item-header">
-                        <span class="node-name">\${nodeTitle}</span>
-                        <span class="status-pill \${status}">\${status}</span>
+                        <span class="node-name">${{nodeTitle}}</span>
+                        <span class="status-pill ${{status}}">${{status}}</span>
                     </div>
-                    \${payloadHtml}
-                    <div class="time">\${time}</div>
+                    ${{payloadHtml}}
+                    <div class="time">${{time}}</div>
                 </div>
             `;
             
             timelineList.appendChild(item);
-            item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+            item.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+        }}
     </script>
 </body>
 </html>"""
