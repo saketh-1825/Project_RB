@@ -117,11 +117,17 @@ func (c *LangGraphClient) CheckHealth(ctx context.Context) (*HealthResponse, err
 	return &result, nil
 }
 
-// SendInterrupt forwards a human response to LangGraph POST /api/v1/analyses/:id/interrupt,
-// resuming a paused analysis that is awaiting human context.
-func (c *LangGraphClient) SendInterrupt(ctx context.Context, analysisID, humanResponse string) error {
-	payload := map[string]string{"response": humanResponse}
-	body, _ := json.Marshal(payload)
+// SendInterrupt forwards a human decision to LangGraph POST /api/v1/analyses/:id/interrupt.
+// Matches the contract payload: interrupt_type, payload (object), provided_by.
+func (c *LangGraphClient) SendInterrupt(ctx context.Context, analysisID, interruptType string, responsePayload map[string]interface{}, providedBy string) error {
+	if responsePayload == nil {
+		responsePayload = map[string]interface{}{}
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"interrupt_type":  interruptType,
+		"payload":         responsePayload,
+		"provided_by":     providedBy,
+	})
 
 	url := fmt.Sprintf("%s/api/v1/analyses/%s/interrupt", c.BaseURL, analysisID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

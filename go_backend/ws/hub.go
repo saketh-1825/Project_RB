@@ -223,7 +223,8 @@ func (c *Client) readPump() {
 			}
 
 		case "human_input":
-			// Forward to LangGraph interrupt endpoint
+			// Forward human decision to LangGraph POST /analyses/:id/interrupt.
+			// Contract payload: { analysis_id, interrupt_type, response_payload, provided_by }
 			if c.hub.LangGraph == nil {
 				break
 			}
@@ -232,19 +233,22 @@ func (c *Client) readPump() {
 				break
 			}
 			analysisID, _ := payload["analysis_id"].(string)
-			response, _ := payload["response"].(string)
-			if analysisID == "" || response == "" {
+			interruptType, _ := payload["interrupt_type"].(string)
+			providedBy, _ := payload["provided_by"].(string)
+			responsePayload, _ := payload["response_payload"].(map[string]interface{})
+			if analysisID == "" || interruptType == "" {
+				log.Warn().Msg("ws: human_input missing analysis_id or interrupt_type")
 				break
 			}
-			go func(aID, resp string) {
+			go func(aID, iType string, respPL map[string]interface{}, by string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				if err := c.hub.LangGraph.SendInterrupt(ctx, aID, resp); err != nil {
+				if err := c.hub.LangGraph.SendInterrupt(ctx, aID, iType, respPL, by); err != nil {
 					log.Error().Err(err).Str("analysis_id", aID).Msg("ws: SendInterrupt failed")
 				} else {
-					log.Info().Str("analysis_id", aID).Msg("ws: human_input forwarded to LangGraph")
+					log.Info().Str("analysis_id", aID).Str("interrupt_type", iType).Msg("ws: human_input forwarded to LangGraph")
 				}
-			}(analysisID, response)
+			}(analysisID, interruptType, responsePayload, providedBy)
 
 		case "pong":
 			c.conn.SetReadDeadline(time.Now().Add(pongWait))

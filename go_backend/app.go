@@ -6,6 +6,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/redis/go-redis/v9"
+
 	"sre-copilot/clients"
 	"sre-copilot/db"
 	"sre-copilot/handlers"
@@ -28,15 +30,16 @@ type App struct {
 	Analyses  db.AnalysisStore
 
 	// Handlers
-	AlertHandler    *handlers.AlertHandler
-	LogHandler      *handlers.LogHandler
-	MetricHandler   *handlers.MetricHandler
-	TraceHandler    *handlers.TraceHandler
-	ServiceHandler  *handlers.ServiceHandler
-	RunbookHandler  *handlers.RunbookHandler
-	IncidentHandler *handlers.IncidentHandler
-	SystemHandler   *handlers.SystemHandler
-	WebhookHandler  *handlers.WebhookHandler
+	AlertHandler     *handlers.AlertHandler
+	LogHandler       *handlers.LogHandler
+	MetricHandler    *handlers.MetricHandler
+	TraceHandler     *handlers.TraceHandler
+	ServiceHandler   *handlers.ServiceHandler
+	RunbookHandler   *handlers.RunbookHandler
+	IncidentHandler  *handlers.IncidentHandler
+	SystemHandler    *handlers.SystemHandler
+	WebhookHandler   *handlers.WebhookHandler
+	DashboardHandler *handlers.DashboardHandler
 
 	// WebSocket Hub
 	WSHub *ws.Hub
@@ -93,7 +96,8 @@ func NewApp(ctx context.Context, cfg *Config) (*App, error) {
 	serviceHandler := handlers.NewServiceHandler(serviceStore)
 	runbookHandler := handlers.NewRunbookHandler(runbookStore, embedder)
 	incidentHandler := handlers.NewIncidentHandler(incidentStore, wsHub)
-	systemHandler := handlers.NewSystemHandler(database.Pool)
+	dashboardHandler := handlers.NewDashboardHandler(incidentStore, alertStore, analysisStore)
+	systemHandler := handlers.NewSystemHandler(database.Pool, redisRawClient(redisClient))
 	webhookHandler := handlers.NewWebhookHandler(alertStore, langGraphClient, retryQueue, wsHub)
 
 	app := &App{
@@ -113,9 +117,10 @@ func NewApp(ctx context.Context, cfg *Config) (*App, error) {
 		TraceHandler:    traceHandler,
 		ServiceHandler:  serviceHandler,
 		RunbookHandler:  runbookHandler,
-		IncidentHandler: incidentHandler,
-		SystemHandler:   systemHandler,
-		WebhookHandler:  webhookHandler,
+		IncidentHandler:  incidentHandler,
+		SystemHandler:    systemHandler,
+		WebhookHandler:   webhookHandler,
+		DashboardHandler: dashboardHandler,
 		WSHub:           wsHub,
 		LangGraph:       langGraphClient,
 		Redis:           redisClient,
@@ -136,6 +141,15 @@ func (app *App) StartBackgroundWorkers(ctx context.Context) {
 		go app.RetryQueue.StartWorker(ctx, app.LangGraph)
 		log.Info().Msg("app: LangGraph retry worker started")
 	}
+}
+
+// redisRawClient safely unwraps a *clients.RedisClient to the underlying *redis.Client.
+// Returns nil when the RedisClient is nil (i.e. Redis was not configured).
+func redisRawClient(rc *clients.RedisClient) *redis.Client {
+	if rc == nil {
+		return nil
+	}
+	return rc.Client()
 }
 
 // Close gracefully closes all connections and releases resources.

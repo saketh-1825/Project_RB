@@ -271,8 +271,10 @@ services:
       SRE_INTERNAL_TOKEN: ${SRE_INTERNAL_TOKEN}
       SERVICES: "payment-api,auth-service,order-service,notification-service,api-gateway"
       LOG_RATE_PER_SECOND: "20"
+      METRICS_RATE_PER_SECOND: "10"
       ERROR_RATE: "0.04"          # 4% error rate baseline
       SPIKE_INTERVAL_SECONDS: "120"  # inject a spike every 2 minutes for testing
+      SPIKE_DURATION_SECONDS: "10"   # spike lasts 10 seconds
     depends_on:
       go-backend:
         condition: service_healthy

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="SRE Copilot — real-time autonomous incident intelligence dashboard" />
+  <title>SRE Copilot · Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── Sidebar ──────────────────────────────────────────────────────── -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">⚡</div>
+    <span class="logo-text">SRE Copilot</span>
+  </div>
+
+  <ul class="sidebar-nav">
+    <li class="nav-item active" id="nav-overview" data-view="overview">
+      <span class="nav-icon">🏠</span>
+      <span>Overview</span>
+    </li>
+    <li class="nav-item" id="nav-incidents" data-view="incidents">
+      <span class="nav-icon">🔥</span>
+      <span>Incidents</span>
+      <span class="nav-badge" id="badge-incidents">0</span>
+    </li>
+    <li class="nav-item" id="nav-alerts" data-view="alerts">
+      <span class="nav-icon">🔔</span>
+      <span>Alerts</span>
+      <span class="nav-badge alert-badge" id="badge-alerts">0</span>
+    </li>
+    <li class="nav-item" id="nav-analyses" data-view="analyses">
+      <span class="nav-icon">🤖</span>
+      <span>Analyses</span>
+    </li>
+  </ul>
+
+  <div class="sidebar-footer">
+    <div class="ws-status" id="ws-status">
+      <span class="ws-dot disconnected"></span>
+      <span id="ws-label">Disconnected</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Main content ──────────────────────────────────────────────────── -->
+<main class="main-content" id="main-content">
+
+  <!-- Header -->
+  <header class="page-header">
+    <div class="header-left">
+      <h1 id="page-title">Overview</h1>
+      <span class="page-subtitle" id="page-subtitle">Live system intelligence</span>
+    </div>
+    <div class="header-right">
+      <button class="btn btn-ghost" id="btn-refresh" title="Refresh">↻ Refresh</button>
+      <span class="timestamp" id="last-updated">—</span>
+    </div>
+  </header>
+
+  <!-- ── Human-in-the-loop action card (hidden by default) ────────────── -->
+  <div class="hitl-banner" id="hitl-banner" style="display:none">
+    <div class="hitl-icon">🧠</div>
+    <div class="hitl-content">
+      <div class="hitl-title">AI needs your input</div>
+      <div class="hitl-question" id="hitl-question"></div>
+      <div class="hitl-meta">
+        <span class="hitl-type" id="hitl-type"></span>
+        <span class="hitl-timeout" id="hitl-timeout"></span>
+      </div>
+    </div>
+    <div class="hitl-actions" id="hitl-actions"></div>
+  </div>
+
+  <!-- ── Overview view ────────────────────────────────────────────────── -->
+  <div id="view-overview">
+    <!-- Summary cards -->
+    <div class="summary-cards">
+      <div class="card stat-card stat-danger" id="card-open-incidents">
+        <div class="stat-label">Open Incidents</div>
+        <div class="stat-value" id="stat-open-incidents">—</div>
+        <div class="stat-hint">Click to view</div>
+      </div>
+      <div class="card stat-card stat-warning" id="card-firing-alerts">
+        <div class="stat-label">Firing Alerts</div>
+        <div class="stat-value" id="stat-firing-alerts">—</div>
+        <div class="stat-hint">Active right now</div>
+      </div>
+      <div class="card stat-card stat-info" id="card-analyses">
+        <div class="stat-label">Recent Analyses</div>
+        <div class="stat-value" id="stat-analyses">—</div>
+        <div class="stat-hint">Last 10 runs</div>
+      </div>
+      <div class="card stat-card stat-success" id="card-system-status">
+        <div class="stat-label">System Status</div>
+        <div class="stat-value" id="stat-system-status">—</div>
+        <div class="stat-hint" id="stat-system-hint">Checking…</div>
+      </div>
+    </div>
+
+    <!-- Recent analyses table -->
+    <div class="card table-card">
+      <div class="card-header">
+        <h2>Recent Analyses</h2>
+        <span class="card-badge" id="badge-analyses-count">0</span>
+      </div>
+      <div class="table-wrapper">
+        <table id="analyses-table">
+          <thead>
+            <tr>
+              <th>Analysis ID</th>
+              <th>Alert ID</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Completed</th>
+            </tr>
+          </thead>
+          <tbody id="analyses-tbody">
+            <tr><td colspan="5" class="empty-row">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Live event feed -->
+    <div class="card event-feed-card">
+      <div class="card-header">
+        <h2>Live Events</h2>
+        <span class="pulse-dot"></span>
+      </div>
+      <ul id="event-feed" class="event-feed"></ul>
+    </div>
+  </div>
+
+  <!-- ── Incidents view ────────────────────────────────────────────────── -->
+  <div id="view-incidents" style="display:none">
+    <div class="card table-card">
+      <div class="card-header">
+        <h2>Open Incidents</h2>
+      </div>
+      <div class="table-wrapper">
+        <table id="incidents-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Services</th>
+              <th>Opened</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="incidents-tbody">
+            <tr><td colspan="7" class="empty-row">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Alerts view ───────────────────────────────────────────────────── -->
+  <div id="view-alerts" style="display:none">
+    <div class="card table-card">
+      <div class="card-header">
+        <h2>Firing Alerts</h2>
+      </div>
+      <div class="table-wrapper">
+        <table id="alerts-table">
+          <thead>
+            <tr>
+              <th>Alert ID</th>
+              <th>Name</th>
+              <th>Source</th>
+              <th>Severity</th>
+              <th>Fired At</th>
+              <th>Services</th>
+            </tr>
+          </thead>
+          <tbody id="alerts-tbody">
+            <tr><td colspan="6" class="empty-row">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Analyses view ─────────────────────────────────────────────────── -->
+  <div id="view-analyses" style="display:none">
+    <div class="card table-card">
+      <div class="card-header"><h2>All Analyses</h2></div>
+      <div class="table-wrapper">
+        <table id="all-analyses-table">
+          <thead>
+            <tr>
+              <th>Analysis ID</th>
+              <th>Alert ID</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Completed</th>
+            </tr>
+          </thead>
+          <tbody id="all-analyses-tbody">
+            <tr><td colspan="5" class="empty-row">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Incident detail view ──────────────────────────────────────────── -->
+  <div id="view-incident-detail" style="display:none">
+    <button class="btn btn-ghost back-btn" id="btn-back">← Back to Incidents</button>
+    <div id="incident-detail-content"></div>
+  </div>
+
+</main>
+
+<!-- Toast notifications -->
+<div id="toast-container" class="toast-container"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

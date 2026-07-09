@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"embed"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +19,9 @@ import (
 	"sre-copilot/db"
 	"sre-copilot/middleware"
 )
+
+//go:embed dashboard
+var dashboardFS embed.FS
 
 func main() {
 	// ── Logger ────────────────────────────────────────────────────────────────
@@ -112,6 +117,9 @@ func main() {
 		api.PATCH("/incidents/:incident_id", app.IncidentHandler.Update)
 		api.POST("/incidents/:incident_id/events", app.IncidentHandler.AddEvent)
 		api.POST("/incidents/:incident_id/report", app.IncidentHandler.AddReport)
+
+		// Dashboard
+		api.GET("/dashboard/summary", app.DashboardHandler.Summary)
 	}
 
 	// ── Internal Endpoints (Service-to-Service, Bearer Authenticated) ─────
@@ -130,6 +138,17 @@ func main() {
 		webhooks.POST("/datadog", middleware.HMACAuth(cfg.DatadogWebhookSecret), app.WebhookHandler.Datadog)
 		webhooks.POST("/custom", middleware.BearerAuth(cfg.SREInternalToken), app.WebhookHandler.Custom)
 	}
+
+	// ── Dashboard static files (go:embed — single binary) ────────────────────
+	dashSub, err := fs.Sub(dashboardFS, "dashboard")
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create dashboard sub-FS")
+	}
+	r.StaticFS("/dashboard", http.FS(dashSub))
+	// Root redirect → dashboard
+	r.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/dashboard/")
+	})
 
 	// ── Server lifecycle ──────────────────────────────────────────────────────
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: r}
