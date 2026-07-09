@@ -134,8 +134,23 @@ def build_root_cause(state: AnalysisState) -> Dict[str, Any]:
             "summary": f.get("summary") or f.get("description") or ""
         })
 
+    # Extract metrics summary and logs for better description
+    metrics_summary = state.get("metrics_summary") or {}
+    rc_desc = rc_data.get("description", "Root cause undetermined")
+    
+    # Try to build a more meaningful description if we have correlation data
+    correlation = state.get("correlation", {})
+    confidence_data = correlation.get("confidence", {})
+    positive_factors = confidence_data.get("positive_factors", [])
+    
+    enhanced_desc = rc_desc
+    if positive_factors and rc_data.get("type") != "UNKNOWN":
+        factors_str = " and ".join([f.split(" (+")[0].lower() for f in positive_factors[:2]])
+        if factors_str:
+            enhanced_desc = f"{rc_desc.rstrip('.')}. This is likely because {factors_str}."
+
     return {
-        "description": rc_data.get("description", "Root cause undetermined"),
+        "description": enhanced_desc,
         "affected_services": rc_data.get("affected_services", []),
         "confidence": rc_data.get("confidence", 0.0),
         "supporting_findings": supporting_findings
@@ -155,8 +170,14 @@ def extract_runbook_fixes(state: AnalysisState) -> List[Dict[str, Any]]:
 
     fixes = []
     for idx, rb in enumerate(runbook_findings):
+        # We map to the new structured format while preserving old fields for any downstream legacy code
+        priority_level = "HIGH" if idx == 0 else ("MEDIUM" if idx == 1 else "LOW")
         fixes.append({
-            "priority": idx + 1,
+            "action": rb.get("title", "Execute runbook steps"),
+            "reason": rb.get("summary") or rb.get("content") or "Matched historical mitigation",
+            "priority": priority_level,
+            # Legacy fields for backward compatibility
+            "priority_rank": idx + 1, 
             "title": rb.get("title", "Runbook Fix"),
             "description": rb.get("summary") or rb.get("content") or "Execute runbook steps",
             "runbook_id": rb.get("runbook_id"),
@@ -173,12 +194,15 @@ def build_suggested_fixes(state: AnalysisState) -> List[Dict[str, Any]]:
     if not fixes:
         return [
             {
-                "priority": 1,
+                "action": "Investigate root cause manually",
+                "reason": "No matching runbooks were found",
+                "priority": "HIGH",
+                "priority_rank": 1,
                 "title": "Investigate root cause",
                 "description": "No runbook found."
             }
         ]
-    fixes.sort(key=lambda x: x["priority"])
+    fixes.sort(key=lambda x: x.get("priority_rank", 1))
     return fixes
 
 
@@ -195,61 +219,47 @@ def build_executive_summary(state: AnalysisState, suggested_fixes: List[Dict[str
     services = rc_data.get("affected_services") or alert.get("affected_services", [])
     services_str = ", ".join(services) if services else "unknown services"
     rc_desc = rc_data.get("description", "an undetermined issue").lower().rstrip(".")
-    s1 = f"High error rates affected {services_str}. The root cause was {rc_desc}."
+    
+    correlation = state.get("correlation", {})
+    confidence_data = correlation.get("confidence", {})
+    level = confidence_data.get("level", "UNKNOWN")
+    score = confidence_data.get("score", 0.0)
+    
+    # 2. Build Evidence Narrative
+    evidence_parts = []
+    if "Strong log evidence found" in confidence_data.get("reason", ""):
+        evidence_parts.append("ERROR log spikes")
+    if "Metric anomaly detected" in confidence_data.get("reason", ""):
+        evidence_parts.append("elevated metrics")
+    if "Topology dependency" in confidence_data.get("reason", ""):
+        evidence_parts.append("topology dependencies")
+    if "runbook" in confidence_data.get("reason", "").lower():
+        evidence_parts.append("matching historical runbook")
+        
+    evidence_str = ""
+    if evidence_parts:
+        if len(evidence_parts) > 1:
+            evidence_str = f" Evidence includes {', '.join(evidence_parts[:-1])}, and {evidence_parts[-1]}."
+        else:
+            evidence_str = f" Evidence includes {evidence_parts[0]}."
 
-    # 2. Metric spike lag
-    s2 = ""
-    metrics_data = state.get("metrics_data") or {}
-
-    err_spike = find_spike_time(metrics_data.get("error_rate") or metrics_data.get("http_error_rate"))
-    db_spike = find_spike_time(metrics_data.get("db_pool_waiting") or metrics_data.get("db_pool_waiting_connections"))
-
-    def parse_datetime(t_str):
-        if not t_str:
-            return None
-        if isinstance(t_str, datetime):
-            return t_str if t_str.tzinfo else t_str.replace(tzinfo=timezone.utc)
-        try:
-            clean = str(t_str).replace("Z", "+00:00")
-            parsed = datetime.fromisoformat(clean)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except Exception:
-            return None
-
-    dt_err_spike = parse_datetime(err_spike)
-    dt_db_spike = parse_datetime(db_spike)
-
-    if dt_db_spike and dt_err_spike and dt_err_spike > dt_db_spike:
-        lag = int((dt_err_spike - dt_db_spike).total_seconds())
-        s2 = f"db_pool_waiting increased {lag} seconds before error_rate spike."
-
-    # 3. Peak metrics
-    metrics_summary = state.get("metrics_summary") or {}
-    err_max = metrics_summary.get("error_rate", {}).get("max")
-    cpu_max = metrics_summary.get("cpu", {}).get("max")
-    mem_max = metrics_summary.get("memory", {}).get("max")
-
-    peak_parts = []
-    if err_max is not None:
-        peak_parts.append(f"Error rate peaked at {err_max}%.")
-    if cpu_max is not None:
-        peak_parts.append(f"CPU peaked at {cpu_max}%.")
-    if mem_max is not None:
-        peak_parts.append(f"Memory peaked at {mem_max}%.")
-    s3 = " ".join(peak_parts)
-
+    s1 = f"{services_str.capitalize()} experienced issues likely caused by {rc_desc}."
+    if rc_desc == "an undetermined issue":
+        s1 = f"{services_str.capitalize()} experienced issues."
+        
+    s2 = f" Confidence: {level} ({score}).{evidence_str}"
+    
     # 4. Top remediation
     s4 = ""
-    runbook_fixes = [f for f in suggested_fixes if f.get("runbook_id")]
-    if runbook_fixes:
-        top_fix_title = runbook_fixes[0].get("title", "")
-        top_fix_title = top_fix_title.rstrip(".")
-        s4 = f"Top remediation: {top_fix_title}."
-    else:
-        s4 = "No runbooks were found, requiring manual investigation."
+    if suggested_fixes:
+        top_fix_action = suggested_fixes[0].get("action", "")
+        if top_fix_action and top_fix_action != "Investigate root cause manually":
+            s4 = f" Recommended action: {top_fix_action}."
+        else:
+            s4 = " No runbooks were found, requiring manual investigation."
 
-    parts = [s1, s2, s3, s4]
-    return " ".join([p for p in parts if p])
+    parts = [s1, s2, s4]
+    return "".join([p for p in parts if p]).strip()
 
 
 def build_incident_report(
@@ -264,6 +274,11 @@ def build_incident_report(
     """
     created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     alert = state.get("alert") or {}
+    
+    correlation = state.get("correlation", {})
+    confidence_data = correlation.get("confidence", {})
+    evidence_quality = correlation.get("evidence_quality", {})
+    risk = correlation.get("risk", {})
 
     return {
         "incident_id": state.get("incident_id") or "unknown",
@@ -272,11 +287,23 @@ def build_incident_report(
         "timeline": timeline,
         "root_cause": root_cause,
         "suggested_fixes": suggested_fixes,
+        "confidence_explanation": confidence_data.get("explanation", ""),
+        "evidence_summary": evidence_quality.get("available_sources", []),
+        "missing_evidence": evidence_quality.get("missing_sources", []),
+        "risk_assessment": risk,
         "created_at": created_at
     }
 
 
 def report_agent_node(state: AnalysisState) -> AnalysisState:
+    try:
+        return _report_agent_node_impl(state)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise
+
+def _report_agent_node_impl(state: AnalysisState) -> AnalysisState:
     """
     Aggregates findings into an IncidentReport and submits it to the backend.
     """

@@ -139,6 +139,8 @@ def detect_and_link_related_analyses(state: AnalysisState) -> AnalysisState:
     while True:
         cursor, keys = r.scan(cursor=cursor, match=match_pattern, count=100)
         for key in keys:
+            if isinstance(key, bytes):
+                key = key.decode("utf-8")
             # Skip checkpoint keys, event keys, and the current analysis key itself
             if key.endswith(":checkpoint") or key.endswith(":events") or key == f"analysis:{analysis_id}":
                 continue

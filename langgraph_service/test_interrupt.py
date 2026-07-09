@@ -66,6 +66,12 @@ def mock_request_for_incidents(self, method, path, **kwargs):
         return resp
     return _original_request(self, method, path, **kwargs)
 
+def mock_query_metrics_batch(self, *args, **kwargs):
+    return {"series": []}
+
+def mock_get_incidents(self, *args, **kwargs):
+    return {"incidents": []}
+
 def setUpModule():
     print("[SETUP] Applying GoBackendClient monkeypatches.")
     GoBackendClient.search_runbooks = mock_search_runbooks
@@ -75,7 +81,8 @@ def setUpModule():
     GoBackendClient.post_finding = mock_post_finding
     GoBackendClient.submit_report = mock_submit_report
     GoBackendClient._request = mock_request_for_incidents
-
+    GoBackendClient.query_metrics_batch = mock_query_metrics_batch
+    GoBackendClient.get_incidents = mock_get_incidents
 
 # Import FastAPI test client
 from fastapi.testclient import TestClient

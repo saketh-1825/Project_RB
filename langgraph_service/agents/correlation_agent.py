@@ -12,6 +12,17 @@ from internal.correlation.engine import (
     build_correlation_finding
 )
 
+def normalize_confidence(confidence: dict) -> dict:
+    return {
+        "score": confidence.get("score", 0.0),
+        "level": confidence.get("level", "LOW"),
+        "reason": confidence.get("reason", ""),
+        "explanation": confidence.get("explanation", ""),
+        "positive_factors": confidence.get("positive_factors", []),
+        "negative_factors": confidence.get("negative_factors", [])
+    }
+
+
 
 def _get_metric_stats(series: Optional[Dict[str, Any]], scale_to_percentage: bool = False) -> Dict[str, Any]:
     if not series or not series.get("data_points"):
@@ -30,6 +41,146 @@ def _get_metric_stats(series: Optional[Dict[str, Any]], scale_to_percentage: boo
     }
 
 
+def analyze_evidence_quality(evidence: dict, state: dict) -> dict:
+    """
+    Analyzes the quality of evidence deterministically.
+    """
+    available_sources = []
+    missing_sources = []
+    conflicts = []
+    quality_score = 0.0
+    
+    if not evidence:
+        return {
+            "available_sources": [],
+            "missing_sources": [{"source": "all", "impact": "No evidence provided"}],
+            "conflicts": [],
+            "quality_score": 0.0
+        }
+    
+    metadata = evidence.get("metadata", {}).get("collection_status", {})
+    
+    # Check Logs
+    log_status = metadata.get("logs", "success")
+    log_findings = evidence.get("logs", {}).get("findings", [])
+    if not log_findings and state.get("findings"):
+        log_findings = [f for f in state.get("findings", []) if f.get("agent") == "log_query_agent"]
+    
+    has_logs = log_status == "success" and len(log_findings) > 0
+    if has_logs:
+        available_sources.append("logs")
+        quality_score += 0.25
+    else:
+        missing_sources.append({"source": "logs", "impact": "Cannot verify application errors from logs"})
+
+    # Check Metrics
+    metrics_status = metadata.get("metrics", "success")
+    metrics_res = evidence.get("metrics") or {}
+    metrics_query_failed = metrics_res.get("metrics_query_failed", False)
+    metrics_response = metrics_res.get("metrics_response") or {}
+    series_list = metrics_response.get("series", []) if metrics_response else []
+    
+    has_metrics = metrics_status == "success" and not metrics_query_failed and len(series_list) > 0
+    if has_metrics:
+        available_sources.append("metrics")
+        quality_score += 0.25
+    else:
+        missing_sources.append({"source": "metrics", "impact": "Cannot verify resource anomalies"})
+
+    # Check RAG
+    rag_status = metadata.get("rag", "success")
+    rag_findings = evidence.get("rag", {}).get("findings", [])
+    if not rag_findings and state.get("findings"):
+        rag_findings = [f for f in state.get("findings", []) if f.get("agent") == "rag_agent"]
+        
+    has_rag = rag_status == "success" and len(rag_findings) > 0
+    if has_rag:
+        available_sources.append("rag")
+        quality_score += 0.25
+    else:
+        missing_sources.append({"source": "rag", "impact": "No historical runbooks found"})
+
+    # Check Topology
+    topology_status = metadata.get("topology", "success")
+    topology = evidence.get("topology") or state.get("services_topology")
+    
+    has_topology = topology_status == "success" and topology and topology.get("services")
+    if has_topology:
+        available_sources.append("topology")
+        quality_score += 0.25
+    else:
+        missing_sources.append({"source": "topology", "impact": "Cannot verify service dependencies"})
+        
+    # Check Conflicts
+    has_error_logs = any(f.get("type") == "log_anomaly" and not f.get("degraded") for f in log_findings)
+    has_metric_anomaly = False
+    
+    from internal.correlation.engine import find_spike_time
+    for s in series_list:
+        if isinstance(s, dict) and find_spike_time(s) is not None:
+            has_metric_anomaly = True
+            break
+            
+    if has_error_logs and has_metrics and not has_metric_anomaly:
+        conflicts.append({
+            "type": "LOG_METRIC_MISMATCH",
+            "description": "Logs indicate failures but metrics show normal state"
+        })
+        quality_score = max(0.0, quality_score - 0.2)
+        
+    return {
+        "available_sources": available_sources,
+        "missing_sources": missing_sources,
+        "conflicts": conflicts,
+        "quality_score": round(quality_score, 2)
+    }
+
+def calculate_risk(evidence: dict, root_cause: dict, affected_services: list, alert: dict) -> dict:
+    """
+    Calculates deterministic risk scoring based on evidence, root cause and affected services.
+    """
+    severity = alert.get("severity", "medium").upper()
+    is_payment = any("payment" in s.lower() or "customer" in s.lower() for s in affected_services)
+    
+    # Collect metric max error rate if available
+    metrics_res = evidence.get("metrics") or {}
+    metrics_response = metrics_res.get("metrics_response") or {}
+    series_list = metrics_response.get("series", []) if metrics_response else []
+    error_rate = 0.0
+    for s in series_list:
+        if isinstance(s, dict) and s.get("metric_name") in ["error_rate", "http_error_rate"]:
+            vals = [float(pt["value"]) for pt in s.get("data_points", []) if pt.get("value") is not None]
+            if vals:
+                error_rate = max(vals)
+            break
+            
+    has_confirmed_rc = root_cause and root_cause.get("type") != "UNKNOWN" and root_cause.get("confidence", 0.0) >= 0.75
+    
+    if is_payment or severity == "CRITICAL" or error_rate > 0.5:
+        return {
+            "level": "CRITICAL",
+            "reason": "Critical service affected (payment/customer-facing) or extremely high error rate",
+            "affected_services": affected_services
+        }
+    elif has_confirmed_rc or severity == "HIGH":
+        return {
+            "level": "HIGH",
+            "reason": "Confirmed root cause with production service degradation",
+            "affected_services": affected_services
+        }
+    elif evidence.get("metrics", {}).get("metrics_query_failed") or not evidence:
+        return {
+            "level": "MEDIUM",
+            "reason": "Partial evidence available or missing metrics",
+            "affected_services": affected_services
+        }
+    else:
+        return {
+            "level": "LOW",
+            "reason": "Weak signals only, no clear critical impact",
+            "affected_services": affected_services
+        }
+
 CONFIDENCE_THRESHOLD = 0.75
 
 def calculate_confidence(state: AnalysisState, evidence: dict) -> dict:
@@ -37,6 +188,8 @@ def calculate_confidence(state: AnalysisState, evidence: dict) -> dict:
 
     score = 0.0
     reasons = []
+    positive_factors = []
+    negative_factors = []
     missing_evidence = []
 
     # 1. Logs Check (+0.3)
@@ -53,14 +206,19 @@ def calculate_confidence(state: AnalysisState, evidence: dict) -> dict:
     )
     if log_status == "success" and has_strong_logs:
         score += 0.3
-        reasons.append("Strong log evidence found (+0.3)")
+        msg = "Strong log evidence found (+0.3)"
+        reasons.append(msg)
+        positive_factors.append(msg)
     else:
         missing_evidence.append("logs")
-        reasons.append("No strong log anomalies detected")
+        msg = "No strong log anomalies detected"
+        reasons.append(msg)
+        negative_factors.append(msg)
 
     # 2. Metrics Check (+0.3)
     metrics_status = evidence.get("metadata", {}).get("collection_status", {}).get("metrics", "success")
     metrics_res = evidence.get("metrics") or {}
+    print("METRICS_RES:", metrics_res)
     metrics_data = {}
     metrics_query_failed = metrics_res.get("metrics_query_failed", False)
     
@@ -93,10 +251,14 @@ def calculate_confidence(state: AnalysisState, evidence: dict) -> dict:
 
     if metrics_status == "success" and not metrics_query_failed and has_metric_anomaly:
         score += 0.3
-        reasons.append("Metric anomaly detected (+0.3)")
+        msg = "Metric anomaly detected (+0.3)"
+        reasons.append(msg)
+        positive_factors.append(msg)
     else:
         missing_evidence.append("metrics")
-        reasons.append("No metric anomalies detected")
+        msg = "No metric anomalies detected"
+        reasons.append(msg)
+        negative_factors.append(msg)
 
     # 3. RAG / Runbook Check (+0.2)
     rag_status = evidence.get("metadata", {}).get("collection_status", {}).get("rag", "success")
@@ -109,25 +271,35 @@ def calculate_confidence(state: AnalysisState, evidence: dict) -> dict:
     )
     if rag_status == "success" and has_similar_runbook:
         score += 0.2
-        reasons.append("Similar incident runbook matched from RAG (+0.2)")
+        msg = "Similar incident runbook matched from RAG (+0.2)"
+        reasons.append(msg)
+        positive_factors.append(msg)
     else:
         missing_evidence.append("rag")
-        reasons.append("No similar runbooks matched above threshold from RAG")
+        msg = "No similar runbooks matched above threshold from RAG"
+        reasons.append(msg)
+        negative_factors.append(msg)
 
     # 4. Topology Check (+0.2)
     topology_status = evidence.get("metadata", {}).get("collection_status", {}).get("topology", "success")
     topology = evidence.get("topology") or state.get("services_topology")
     if topology_status == "success" and topology and topology.get("services"):
         score += 0.2
-        reasons.append("Topology dependency matched (+0.2)")
+        msg = "Topology dependency matched (+0.2)"
+        reasons.append(msg)
+        positive_factors.append(msg)
     else:
         missing_evidence.append("topology")
-        reasons.append("Services topology lookup failed or empty")
+        msg = "Services topology lookup failed or empty"
+        reasons.append(msg)
+        negative_factors.append(msg)
 
     # 5. Human Context Boost (+0.3)
     if state.get("human_context"):
         score += 0.3
-        reasons.append("Human context provided (+0.3 boost)")
+        msg = "Human context provided (+0.3 boost)"
+        reasons.append(msg)
+        positive_factors.append(msg)
 
     score = min(round(score, 2), 1.0)
     
@@ -141,16 +313,33 @@ def calculate_confidence(state: AnalysisState, evidence: dict) -> dict:
     reason_str = "; ".join(reasons)
     if missing_evidence:
         reason_str += f" | Missing evidence: {', '.join(missing_evidence)}"
+        
+    explanation = f"{level} confidence ({score}) based on evidence."
+    if positive_factors:
+        explanation += f" Supporting: {', '.join(positive_factors)}."
+    if negative_factors:
+        explanation += f" Detracting: {', '.join(negative_factors)}."
 
     return {
         "score": score,
         "level": level,
         "reason": reason_str,
+        "explanation": explanation,
+        "positive_factors": positive_factors,
+        "negative_factors": negative_factors,
         "missing_evidence": missing_evidence
     }
 
 
 def correlation_agent_node(state: AnalysisState) -> AnalysisState:
+    try:
+        return _correlation_agent_node_impl(state)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise
+
+def _correlation_agent_node_impl(state: AnalysisState) -> AnalysisState:
     """
     Correlates collected evidence to perform root cause analysis, calculate
     confidence scoring, and evaluate risk without querying any backends if evidence is present.
@@ -383,14 +572,21 @@ def correlation_agent_node(state: AnalysisState) -> AnalysisState:
             time_range=time_range
         )
 
+    # Store root_cause early so calculate_confidence can use it
+    state["root_cause"] = root_cause
+    
     # Calculate deterministic confidence
     confidence = calculate_confidence(state, evidence)
+    print("CONFIDENCE TYPE:", type(confidence))
 
     # Determine risk level
     severity = alert.get("severity", "medium").upper()
     if severity not in ["LOW", "MEDIUM", "HIGH", "CRITICAL"]:
         severity = "HIGH" if severity == "CRITICAL" else "MEDIUM"
     impact = f"Potential service disruption affecting {', '.join(affected_services)}" if affected_services else "Unknown service impact"
+    
+    risk_assessment = calculate_risk(evidence, root_cause, affected_services, alert)
+    evidence_quality = analyze_evidence_quality(evidence, state)
 
     # Category determination
     rc_type = root_cause.get("type", "UNKNOWN")
@@ -407,6 +603,8 @@ def correlation_agent_node(state: AnalysisState) -> AnalysisState:
     state["similar_incidents"] = similar_past_incidents
     state["root_cause"] = root_cause
     state["correlation_finding"] = correlation_finding
+    state["evidence_quality"] = evidence_quality
+    state["risk_assessment"] = risk_assessment
 
     # Ensure findings is populated
     if "findings" not in state or not isinstance(state["findings"], list):
@@ -423,16 +621,15 @@ def correlation_agent_node(state: AnalysisState) -> AnalysisState:
             "service": affected_services[0] if affected_services else "unknown",
             "reason": root_cause.get("description", "Undetermined root cause"),
             "category": category,
+            "reasoning": confidence.get("explanation", ""),
             # Backward compatible keys
             "description": correlation_finding.get("summary", "Correlation analysis completed."),
             "affected_services": affected_services,
             "confidence": correlation_finding.get("confidence", 0.3),
         },
-        "confidence": {
-            "score": confidence["score"],
-            "level": confidence["level"],
-            "reason": confidence["reason"]
-        },
+        "confidence": normalize_confidence(confidence),
+        "evidence_quality": evidence_quality,
+        "risk": risk_assessment,
         "supporting_evidence": {
             "logs": evidence.get("logs", {}).get("findings", []),
             "metrics": list(metrics_data.values()),
@@ -450,7 +647,11 @@ def correlation_agent_node(state: AnalysisState) -> AnalysisState:
         "source": "correlation_agent",
         "event_type": "degraded" if metrics_query_failed else "historical_correlation",
         "message": f"Correlation analysis completed — confidence {confidence['score']}",
-        "details": correlation_finding
+        "details": correlation_finding,
+        "data": {
+            "risk_level": risk_assessment,
+            "evidence_quality": evidence_quality
+        }
     }
     if "incident_events" not in state or not isinstance(state["incident_events"], list):
         state["incident_events"] = []

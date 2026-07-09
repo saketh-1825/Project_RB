@@ -49,7 +49,6 @@ def collect_metrics_data(alert: dict, time_window: dict = None) -> dict:
     Queries metrics and past incidents from the Go backend.
     """
     from datetime import datetime, timedelta, timezone
-    from internal.client.go_backend import GoBackendClient
     from internal.correlation.engine import find_historical_matches
 
     base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
@@ -88,7 +87,7 @@ def collect_metrics_data(alert: dict, time_window: dict = None) -> dict:
             {"metric_name": "db_pool_waiting", "from": from_time_str, "to": to_time_str}
         ]
         metrics_response = client.query_metrics_batch(queries)
-    except Exception:
+    except Exception as e:
         metrics_query_failed = True
 
     similar_past_incidents = []

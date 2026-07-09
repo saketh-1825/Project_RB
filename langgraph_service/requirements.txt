@@ -22,3 +22,5 @@ pydantic-settings==2.3.0
 python-dotenv==1.0.1
 structlog==24.1.0
 pytest==8.4.1
+
+fakeredis==2.23.2

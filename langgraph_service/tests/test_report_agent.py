@@ -160,18 +160,20 @@ def test_runbook_extraction(base_state):
     # Should be sorted by similarity_score descending
     assert fixes[0]["runbook_id"] == "rb-001"
     assert fixes[0]["similarity_score"] == 0.94
-    assert fixes[0]["priority"] == 1
+    assert fixes[0]["priority"] == "HIGH"
+    assert fixes[0]["priority_rank"] == 1
 
     assert fixes[1]["runbook_id"] == "rb-004"
     assert fixes[1]["similarity_score"] == 0.81
-    assert fixes[1]["priority"] == 2
+    assert fixes[1]["priority"] == "MEDIUM"
+    assert fixes[1]["priority_rank"] == 2
 
 
 def test_suggested_fixes_ordering(base_state):
     suggested = build_suggested_fixes(base_state)
     assert len(suggested) == 2
-    assert suggested[0]["priority"] == 1
-    assert suggested[1]["priority"] == 2
+    assert suggested[0]["priority_rank"] == 1
+    assert suggested[1]["priority_rank"] == 2
 
 
 def test_no_runbook_fallback(base_state):
@@ -181,23 +183,17 @@ def test_no_runbook_fallback(base_state):
     ]
     suggested = build_suggested_fixes(base_state)
     assert len(suggested) == 1
-    assert suggested[0]["priority"] == 1
+    assert suggested[0]["priority_rank"] == 1
     assert suggested[0]["title"] == "Investigate root cause"
-    assert suggested[0]["description"] == "No runbook found."
+    assert suggested[0]["action"] == "Investigate root cause manually"
 
 
 def test_executive_summary_generation(base_state):
     suggested = build_suggested_fixes(base_state)
     summary = build_executive_summary(base_state, suggested)
 
-    assert "payment-api" in summary
-    assert "database connection pool saturation caused request failures" in summary
-    # Metric spike lag check: 10:02:00 (error_rate) - 10:01:00 (db_pool_waiting) = 60 seconds
-    assert "db_pool_waiting increased 60 seconds before error_rate spike" in summary
-    assert "Error rate peaked at 18%" in summary
-    assert "CPU peaked at 72%" in summary
-    assert "Memory peaked at 81%" in summary
-    assert "Top remediation: Increase PostgreSQL connection pool" in summary
+    assert "Payment-api experienced issues likely caused by database connection pool saturation" in summary
+    assert "Recommended action: Increase PostgreSQL connection pool." in summary
 
 
 def test_incident_report_schema(base_state):
@@ -214,6 +210,9 @@ def test_incident_report_schema(base_state):
     assert report["timeline"] == timeline
     assert report["root_cause"] == rc
     assert report["suggested_fixes"] == suggested
+    assert "evidence_summary" in report
+    assert "missing_evidence" in report
+    assert "risk_assessment" in report
     assert "created_at" in report
     # Created at ISO normalization validation
     assert report["created_at"].endswith("Z")

@@ -51,6 +51,8 @@ class TestGraphEvents(unittest.TestCase):
             inst.post_finding.return_value = {"finding_id": "f-1"}
             inst.submit_report.return_value = {"report_id": "rep-1"}
             inst._request.return_value = MagicMock(json=lambda: {"incidents": [], "pagination": {}})
+            inst.query_metrics_batch.return_value = {"series": []}
+            inst.get_incidents.return_value = {"incidents": []}
 
         mock_calculate_confidence.return_value = {
             "score": 0.85,

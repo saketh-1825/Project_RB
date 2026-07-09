@@ -65,8 +65,8 @@ class TestConfidenceRouting(unittest.TestCase):
     ):
         """
         TEST 1: High confidence path
-        Input: Complete evidence package.
-        Expected flow: Supervisor -> Evidence Agent -> Correlation Agent -> Report Agent (completed).
+        Input: 95% confidence from correlation logic
+        Expected flow: Supervisor -> Evidence Agent -> Correlation Agent -> Report Agent -> END
         """
         # Supervisor mock
         mock_supervisor = MagicMock()
@@ -123,6 +123,7 @@ class TestConfidenceRouting(unittest.TestCase):
         graph = get_graph()
         result = graph.invoke(initial_state)
 
+        print("CONFIDENCE:", result.get("correlation", {}).get("confidence"))
         # Execution should successfully route to report_agent and complete
         self.assertEqual(result.get("status"), "completed")
         self.assertEqual(result.get("current_agent"), "report_agent")
