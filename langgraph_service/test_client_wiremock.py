@@ -16,8 +16,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from internal.client.go_backend import GoBackendClient
 
-
-WIREMOCK_BASE_URL = os.environ.get("WIREMOCK_URL", "http://localhost:8080")
+WIREMOCK_BASE_URL = os.environ.get(
+    "WIREMOCK_URL",
+    os.environ.get(
+        "GO_BACKEND_URL",
+        "http://mock-go-backend:8080"
+    )
+)
 TEST_TOKEN = "mock-token"
 
 
