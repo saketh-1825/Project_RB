@@ -14,6 +14,7 @@ import (
 	"sre-copilot/ws"
 )
 
+// test
 // App manages the application context, state, stores, and handlers.
 type App struct {
 	Config *Config
@@ -101,31 +102,31 @@ func NewApp(ctx context.Context, cfg *Config) (*App, error) {
 	webhookHandler := handlers.NewWebhookHandler(alertStore, langGraphClient, retryQueue, wsHub)
 
 	app := &App{
-		Config:          cfg,
-		DB:              database,
-		Alerts:          alertStore,
-		Incidents:       incidentStore,
-		Logs:            logStore,
-		Metrics:         metricStore,
-		Traces:          traceStore,
-		Services:        serviceStore,
-		Runbooks:        runbookStore,
-		Analyses:        analysisStore,
-		AlertHandler:    alertHandler,
-		LogHandler:      logHandler,
-		MetricHandler:   metricHandler,
-		TraceHandler:    traceHandler,
-		ServiceHandler:  serviceHandler,
-		RunbookHandler:  runbookHandler,
+		Config:           cfg,
+		DB:               database,
+		Alerts:           alertStore,
+		Incidents:        incidentStore,
+		Logs:             logStore,
+		Metrics:          metricStore,
+		Traces:           traceStore,
+		Services:         serviceStore,
+		Runbooks:         runbookStore,
+		Analyses:         analysisStore,
+		AlertHandler:     alertHandler,
+		LogHandler:       logHandler,
+		MetricHandler:    metricHandler,
+		TraceHandler:     traceHandler,
+		ServiceHandler:   serviceHandler,
+		RunbookHandler:   runbookHandler,
 		IncidentHandler:  incidentHandler,
 		SystemHandler:    systemHandler,
 		WebhookHandler:   webhookHandler,
 		DashboardHandler: dashboardHandler,
-		WSHub:           wsHub,
-		LangGraph:       langGraphClient,
-		Redis:           redisClient,
-		RetryQueue:      retryQueue,
-		Embedder:        embedder,
+		WSHub:            wsHub,
+		LangGraph:        langGraphClient,
+		Redis:            redisClient,
+		RetryQueue:       retryQueue,
+		Embedder:         embedder,
 	}
 
 	return app, nil
