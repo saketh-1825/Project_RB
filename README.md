@@ -229,23 +229,25 @@ class AnalysisState(TypedDict, total=False):
     # Core
     analysis_id: str
     alert_id: str
-    alert: dict                      # raw alert payload
-    incident_id: Optional[str]       # created by supervisor in Go backend
-    status: str                      # pending / running / awaiting_human / completed / failed
+    alert: dict  # raw alert payload
+    incident_id: Optional[str]  # created by supervisor in Go backend
+    status: str  # pending / running / awaiting_human / completed / failed
     current_agent: str
 
     # Evidence
-    findings: List[Dict]             # accumulated findings from all agents
-    incident_events: List[Dict]      # timeline events
-    evidence: Optional[dict]         # unified evidence object (logs, metrics, rag, topology)
+    findings: List[Dict]  # accumulated findings from all agents
+    incident_events: List[Dict]  # timeline events
+    evidence: Optional[dict]  # unified evidence object (logs, metrics, rag, topology)
     metrics_data: Optional[dict]
     metrics_summary: Optional[dict]
     services_topology: Optional[dict]
     similar_incidents: Optional[List]
 
     # Correlation
-    root_cause: Optional[dict]       # type, description, confidence, affected_services
-    correlation: Optional[dict]      # full correlation output with confidence, risk, quality
+    root_cause: Optional[dict]  # type, description, confidence, affected_services
+    correlation: Optional[
+        dict
+    ]  # full correlation output with confidence, risk, quality
     correlation_finding: Optional[dict]
     evidence_quality: Optional[dict]
     risk_assessment: Optional[dict]
@@ -257,11 +259,11 @@ class AnalysisState(TypedDict, total=False):
 
     # HITL
     awaiting_human: bool
-    waiting_at: Optional[str]        # which node paused
+    waiting_at: Optional[str]  # which node paused
     interrupt_type: Optional[str]
     interrupt_question: Optional[str]
-    human_context: Optional[str]     # operator-provided context
-    resume_count: int                # max 2 resumptions before failing
+    human_context: Optional[str]  # operator-provided context
+    resume_count: int  # max 2 resumptions before failing
     last_interrupted_at: Optional[str]
 
     # Human Review Node
@@ -272,8 +274,8 @@ class AnalysisState(TypedDict, total=False):
     related_analyses: Optional[List[dict]]  # linked overlapping alerts
 
     # Output
-    report: Optional[dict]           # final IncidentReport
-    backend_health: Optional[str]    # "ok" or "unavailable"
+    report: Optional[dict]  # final IncidentReport
+    backend_health: Optional[str]  # "ok" or "unavailable"
 ```
 
 ---

@@ -3,9 +3,10 @@ Thin wrapper around the OpenRouter API for LLM calls.
 Falls back gracefully if the API key is missing or the call fails,
 so the pipeline never crashes due to LLM unavailability.
 """
-import os
+
 import logging
-from typing import Any
+import os
+
 import httpx
 from dotenv import load_dotenv
 
@@ -19,7 +20,7 @@ DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 def call_llm(prompt: str, max_tokens: int = 300, timeout: float = 30.0) -> str | None:
     """
-    Sends a prompt to the OpenRouter LLM and returns the 
+    Sends a prompt to the OpenRouter LLM and returns the
     text response. Strips chain-of-thought reasoning blocks
     that reasoning models emit before their final answer.
     Returns None on any failure — callers must handle None.
@@ -86,7 +87,7 @@ def _strip_reasoning(text: str) -> str:
 
     Strategy:
     1. If the text contains a blank line, split on double
-       newlines and take the last non-empty paragraph — 
+       newlines and take the last non-empty paragraph —
        reasoning models put their final answer last.
     2. If the last paragraph looks like a complete sentence
        (ends with . or "), return it.

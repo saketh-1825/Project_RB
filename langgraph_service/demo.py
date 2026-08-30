@@ -17,10 +17,12 @@ USAGE:
 
 Then watch the browser dashboard update live.
 """
+
 import sys
 import time
 import uuid
 import webbrowser
+
 import httpx
 
 BASE_URL = "http://127.0.0.1:9000"
@@ -69,24 +71,24 @@ def check_server():
         status = r.json().get("status", "unknown")
         print(f"  Server: {BOLD}{status}{RESET}")
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001  # any connection error means server isn't running
         print(f"\n  {BOLD}ERROR:{RESET} FastAPI server is not running.")
-        print(f"  Start it first:\n")
-        print(f"    uvicorn main:app --reload --port 9000\n")
+        print("  Start it first:\n")
+        print("    uvicorn main:app --reload --port 9000\n")
         return False
 
 
 def open_dashboard(analysis_id: str):
     url = f"{BASE_URL}/dashboard/{analysis_id}"
     print(f"\n  Dashboard: {BOLD}{url}{RESET}")
-    print(f"  Opening browser...")
+    print("  Opening browser...")
     webbrowser.open(url)
-    print(f"  Waiting 3 seconds for browser to load...")
+    print("  Waiting 3 seconds for browser to load...")
     time.sleep(3)
 
 
 def trigger_analysis(analysis_id: str, path: str) -> dict:
-    print(f"\n  Triggering analysis... (watch the browser!)\n")
+    print("\n  Triggering analysis... (watch the browser!)\n")
     r = httpx.post(
         f"{BASE_URL}/api/v1/demo",
         json={"analysis_id": analysis_id, "path": path},
@@ -100,11 +102,13 @@ def resume_analysis(analysis_id: str, path: str) -> dict:
         "path_b": "This looks like the Redis connection leak from last Tuesday — connection pool is not being released after timeouts. Check pool settings and restart the connection manager.",
         "path_c": "This is a new failure mode introduced in last night's deploy — the payment gateway timeout value was changed from 5s to 30s which holds DB connections open much longer, exhausting the pool.",
     }
-    context = human_contexts.get(path, "Manual investigation confirms connection pool exhaustion as root cause.")
+    context = human_contexts.get(
+        path, "Manual investigation confirms connection pool exhaustion as root cause."
+    )
 
     print(f"\n  {BOLD}Injecting human context:{RESET}")
-    print(f"  {DIM}\"{context}\"{RESET}\n")
-    print(f"  Resuming analysis...")
+    print(f'  {DIM}"{context}"{RESET}\n')
+    print("  Resuming analysis...")
 
     r = httpx.post(
         f"{BASE_URL}/api/v1/demo/{analysis_id}/resume",
@@ -156,10 +160,12 @@ def main():
             "path_c": "no matching runbook found (RAG pause)",
         }
         print(f"\n  {'=' * 50}")
-        print(f"  {BOLD}GRAPH PAUSED{RESET} — {pause_reason.get(path, 'human input required')}")
+        print(
+            f"  {BOLD}GRAPH PAUSED{RESET} — {pause_reason.get(path, 'human input required')}"
+        )
         print(f"  {'=' * 50}")
-        print(f"\n  The dashboard is now showing the HITL pause state.")
-        input(f"\n  Press ENTER to inject human context and resume...\n")
+        print("\n  The dashboard is now showing the HITL pause state.")
+        input("\n  Press ENTER to inject human context and resume...\n")
 
         resume_result = resume_analysis(analysis_id, path)
         print_result(resume_result, "After resume")

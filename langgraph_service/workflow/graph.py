@@ -12,7 +12,6 @@ from agents.evidence_agent import evidence_agent_node
 from agents.human_review_agent import human_review_node
 from agents.report_agent import report_agent_node
 from agents.supervisor import supervisor_node
-
 from internal.client.go_backend import GoBackendClient
 from internal.graph_events import emit_event
 from internal.redis_client import _get_redis, save_analysis_state
@@ -25,7 +24,6 @@ executed_nodes_var: ContextVar[set] = ContextVar("executed_nodes")
 
 TRACKED_NODES = [
     "supervisor",
-
     "evidence_agent",
     "correlation_agent",
     "human_review",
@@ -38,7 +36,6 @@ TRACKED_NODES = [
 # here makes the dependency real and checkable by mypy too.
 NODE_FUNCS: dict[str, Callable[[AnalysisState], AnalysisState]] = {
     "supervisor_node": supervisor_node,
-
     "evidence_agent_node": evidence_agent_node,
     "correlation_agent_node": correlation_agent_node,
     "report_agent_node": report_agent_node,
@@ -125,13 +122,15 @@ def wrap_node(agent_name: str, node_func_name: str):
 
                     if agent_name == "correlation_agent":
                         rc = result.get("root_cause") or {}
-                        
+
                         # Use the overall correlation confidence so it matches the agent completion event
                         corr_data = result.get("correlation", {})
                         if isinstance(corr_data.get("confidence"), dict):
                             overall_conf = corr_data["confidence"].get("score", 0.0)
                         else:
-                            overall_conf = rc.get("confidence") or f.get("confidence") or 0.0
+                            overall_conf = (
+                                rc.get("confidence") or f.get("confidence") or 0.0
+                            )
 
                         f_payload = {
                             "root_cause": rc.get("type")
@@ -234,8 +233,9 @@ def confidence_router(state: AnalysisState):
     """
     if state.get("backend_health") == "unavailable":
         return "report_agent"
-    confidence = state.get("correlation", {}).get("confidence", {}).get("score", 0.0)
-    if confidence >= 0.75:
+    confidence = (state.get("correlation") or {}).get("confidence") or {}
+    score = confidence.get("score", 0.0) if isinstance(confidence, dict) else 0.0
+    if score >= 0.75:
         return "report_agent"
     return "human_review"
 
@@ -300,7 +300,10 @@ def handle_run_completion(analysis_id: str, result: dict, executed: set) -> None
                 event_type="analysis.completed",
                 node="report_agent",
                 status="completed",
-                payload={"message": "Analysis completed successfully", "data": {"report": result.get("report")}},
+                payload={
+                    "message": "Analysis completed successfully",
+                    "data": {"report": result.get("report")},
+                },
             )
         elif status == "failed":
             emit_event(

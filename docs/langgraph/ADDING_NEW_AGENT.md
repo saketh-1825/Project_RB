@@ -10,6 +10,7 @@ Create a new file in `langgraph_service/agents/`:
 ```python
 from schemas.state import AnalysisState
 
+
 def remediation_agent_node(state: AnalysisState) -> AnalysisState:
     root_cause = state.get("root_cause")
     # Execute remediation logic here
@@ -37,7 +38,9 @@ from agents.remediation_agent import remediation_agent_node
 # Track it for event emissions
 TRACKED_NODES.append("remediation_agent")
 
-builder.add_node("remediation_agent", wrap_node("remediation_agent", "remediation_agent_node"))
+builder.add_node(
+    "remediation_agent", wrap_node("remediation_agent", "remediation_agent_node")
+)
 ```
 
 ## 4. Add Graph Edges

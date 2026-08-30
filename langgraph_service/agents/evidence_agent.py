@@ -169,7 +169,9 @@ def evidence_agent_node(state: AnalysisState) -> AnalysisState:
         metrics_response = metrics_res.get("metrics_response") or {}
         series_list = metrics_response.get("series", []) if metrics_response else []
         metrics_data: dict[str, Any] = {
-            str(s.get("metric_name")): s for s in series_list if isinstance(s, dict) and s.get("metric_name")
+            str(s.get("metric_name")): s
+            for s in series_list
+            if isinstance(s, dict) and s.get("metric_name")
         }
         for m_name in list(metrics_data.keys()):
             if m_name == "http_error_rate":

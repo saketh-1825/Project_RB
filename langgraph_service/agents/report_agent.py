@@ -1,10 +1,10 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import logging
-from internal.llm_client import call_llm
 from internal.client.go_backend import GoBackendClient
+from internal.llm_client import call_llm
 from schemas.state import AnalysisState
 
 logger = logging.getLogger(__name__)
@@ -246,7 +246,11 @@ def build_executive_summary(
     confidence_score = confidence_data.get("score", 0.0)
     confidence_level = confidence_data.get("level", "LOW")
     available_sources = evidence_quality.get("available_sources", [])
-    top_fix = suggested_fixes[0].get("action", "manual investigation") if suggested_fixes else "manual investigation"
+    top_fix = (
+        suggested_fixes[0].get("action", "manual investigation")
+        if suggested_fixes
+        else "manual investigation"
+    )
     human_context = state.get("human_context", "")
 
     # Build LLM prompt
@@ -286,10 +290,16 @@ Write only the 3-sentence summary. No headers, no bullet points, no preamble."""
     if evidence_parts:
         joined = ", ".join(evidence_parts[:-1])
         last = evidence_parts[-1]
-        evidence_str = f" Evidence includes {f'{joined} and {last}' if joined else last}."
+        evidence_str = (
+            f" Evidence includes {f'{joined} and {last}' if joined else last}."
+        )
     s1 = f"{services_str.capitalize()} experienced issues likely caused by {rc_desc.lower().rstrip('.')}."
     s2 = f" Confidence: {level} ({score}).{evidence_str}"
-    s3 = f" Recommended action: {top_fix}." if top_fix != "manual investigation" else " No matching runbooks found — manual investigation required."
+    s3 = (
+        f" Recommended action: {top_fix}."
+        if top_fix != "manual investigation"
+        else " No matching runbooks found — manual investigation required."
+    )
     return (s1 + s2 + s3).strip()
 
 

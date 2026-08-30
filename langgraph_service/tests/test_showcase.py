@@ -15,18 +15,21 @@ from unittest.mock import patch
 # Ensure Python can find local imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import time
 import threading
+import time
 import webbrowser
-import uvicorn
+
 import pytest
+import uvicorn
 
 SERVER_PORT = 9001  # use 9001 to avoid clashing with any running server
+
 
 @pytest.fixture(scope="session", autouse=True)
 def live_server():
     """Starts the FastAPI server in a background thread for the whole test session."""
     import main as app_module
+
     config = uvicorn.Config(
         app=app_module.app,
         host="127.0.0.1",
@@ -39,6 +42,7 @@ def live_server():
     time.sleep(2)  # wait for startup
     yield
     server.should_exit = True
+
 
 from internal.errors import GoBackendError
 from workflow.graph import resume_analysis, run_analysis
@@ -161,7 +165,9 @@ class TestShowcase(unittest.TestCase):
         print(f"Confidence score: {confidence}")
         print(f"Report generated: {result.get('report') is not None}")
         print(f"Key findings count: {len(result.get('findings', []))}")
-        print(f"Executive summary: {str(result.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}")
+        print(
+            f"Executive summary: {str(result.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}"
+        )
 
     def test_path_b_human_review_low_confidence(self):
         """
@@ -229,7 +235,9 @@ class TestShowcase(unittest.TestCase):
         print(f"Confidence score: {confidence}")
         print(f"Report generated: {result2.get('report') is not None}")
         print(f"Key findings count: {len(result2.get('findings', []))}")
-        print(f"Executive summary: {str(result2.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}")
+        print(
+            f"Executive summary: {str(result2.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}"
+        )
 
     def test_path_c_human_review_no_runbook(self):
         """
@@ -269,7 +277,13 @@ class TestShowcase(unittest.TestCase):
             if "No runbook exists" in query:
                 # Bypass rag_agent bug by returning a high-similarity runbook
                 # only after human context is injected and included in the query.
-                return [{"id": "rb-payment-timeout", "title": "Payment Gateway Timeout Runbook", "similarity_score": 0.99}]
+                return [
+                    {
+                        "id": "rb-payment-timeout",
+                        "title": "Payment Gateway Timeout Runbook",
+                        "similarity_score": 0.99,
+                    }
+                ]
             return []
 
         self.mock_search_runbooks.side_effect = search_runbooks_side_effect
@@ -301,7 +315,9 @@ class TestShowcase(unittest.TestCase):
         print(f"Confidence score: {confidence}")
         print(f"Report generated: {result2.get('report') is not None}")
         print(f"Key findings count: {len(result2.get('findings', []))}")
-        print(f"Executive summary: {str(result2.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}")
+        print(
+            f"Executive summary: {str(result2.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}"
+        )
 
     def test_path_d_degraded_backend(self):
         """
@@ -345,7 +361,9 @@ class TestShowcase(unittest.TestCase):
         print(f"Backend Health: {result.get('backend_health')}")
         print(f"Report generated: {result.get('report') is not None}")
         print(f"Key findings count: {len(result.get('findings', []))}")
-        print(f"Executive summary: {str(result.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}")
+        print(
+            f"Executive summary: {str(result.get('report', {}).get('executive_summary', 'N/A')).encode('ascii', 'replace').decode('ascii')}"
+        )
 
 
 if __name__ == "__main__":

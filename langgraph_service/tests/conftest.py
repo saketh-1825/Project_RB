@@ -1,6 +1,5 @@
 import fakeredis
 
-
 import internal.redis_client
 
 fake_redis = fakeredis.FakeRedis(decode_responses=True)
@@ -8,13 +7,13 @@ fake_redis = fakeredis.FakeRedis(decode_responses=True)
 # Override the global _redis_conn directly
 internal.redis_client._redis_conn = fake_redis
 
-import internal.websocket_manager
+from unittest.mock import MagicMock, patch
 
 # And override the module-level imports
-
-
 import pytest
-from unittest.mock import patch, MagicMock
+
+import internal.websocket_manager
+
 
 @pytest.fixture(autouse=True, scope="session")
 def mock_graph_backend_client():

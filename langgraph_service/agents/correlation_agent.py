@@ -1,15 +1,15 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import logging
-from internal.llm_client import call_llm
 from internal.client.go_backend import GoBackendClient
 from internal.correlation.engine import (
     build_correlation_finding,
     find_historical_matches,
     infer_root_cause,
 )
+from internal.llm_client import call_llm
 from schemas.state import AnalysisState
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,9 @@ def _get_metric_stats(
     }
 
 
-def analyze_evidence_quality(evidence: dict[str, Any], state: AnalysisState) -> dict[str, Any]:
+def analyze_evidence_quality(
+    evidence: dict[str, Any], state: AnalysisState
+) -> dict[str, Any]:
     """
     Analyzes the quality of evidence deterministically.
     """
@@ -543,7 +545,9 @@ def _correlation_agent_node_impl(state: AnalysisState) -> AnalysisState:
         else:
             series_list = metrics_response.get("series", []) if metrics_response else []
             metrics_data = {
-                str(s.get("metric_name")): s for s in series_list if isinstance(s, dict) and s.get("metric_name")
+                str(s.get("metric_name")): s
+                for s in series_list
+                if isinstance(s, dict) and s.get("metric_name")
             }
             for m_name in list(metrics_data.keys()):
                 if m_name == "http_error_rate":
@@ -568,7 +572,10 @@ def _correlation_agent_node_impl(state: AnalysisState) -> AnalysisState:
                 ),
                 "error_rate": {"max": error_rate_stats["max"]},
             }
-            time_range: dict[str, str] = {"from": str(from_time_str), "to": str(to_time_str)}
+            time_range: dict[str, str] = {
+                "from": str(from_time_str),
+                "to": str(to_time_str),
+            }
             correlation_finding = build_correlation_finding(
                 root_cause=root_cause,
                 metric_names=["error_rate", "cpu", "memory", "db_pool_waiting"],
@@ -659,7 +666,9 @@ def _correlation_agent_node_impl(state: AnalysisState) -> AnalysisState:
     else:
         series_list = metrics_response.get("series", []) if metrics_response else []
         metrics_data = {
-            str(s.get("metric_name")): s for s in series_list if isinstance(s, dict) and s.get("metric_name")
+            str(s.get("metric_name")): s
+            for s in series_list
+            if isinstance(s, dict) and s.get("metric_name")
         }
         for m_name in list(metrics_data.keys()):
             if m_name == "http_error_rate":
@@ -718,15 +727,15 @@ def _correlation_agent_node_impl(state: AnalysisState) -> AnalysisState:
                 findings_summary += f"- {f.get('agent', 'unknown')}: {f.get('summary', f.get('title', ''))}\n"
 
         llm_prompt = f"""You are an expert SRE performing root cause analysis.
-The automated system scored confidence at {confidence['score']} (below the 0.75 autonomous threshold).
+The automated system scored confidence at {confidence["score"]} (below the 0.75 autonomous threshold).
 
 EVIDENCE COLLECTED:
-- Root cause type detected: {root_cause.get('type', 'UNKNOWN')}
-- Affected services: {', '.join(affected_services)}
+- Root cause type detected: {root_cause.get("type", "UNKNOWN")}
+- Affected services: {", ".join(affected_services)}
 - Findings:
-{findings_summary if findings_summary else '  No findings available'}
-- Missing evidence: {', '.join(confidence.get('missing_evidence', []))}
-{f"- Operator context: {state.get('human_context')}" if state.get('human_context') else ""}
+{findings_summary if findings_summary else "  No findings available"}
+- Missing evidence: {", ".join(confidence.get("missing_evidence", []))}
+{f"- Operator context: {state.get('human_context')}" if state.get("human_context") else ""}
 
 In 2 sentences, explain what likely caused this incident and what evidence is still needed to be certain.
 Write only the 2 sentences. No preamble."""

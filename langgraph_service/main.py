@@ -2,17 +2,17 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from unittest.mock import patch, MagicMock
 
 from api.routes import interrupt
+from internal.errors import GoBackendError
 from internal.websocket_manager import manager
 from workflow.graph import run_analysis
-from internal.errors import GoBackendError
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ app = FastAPI(title="LangGraph SRE Copilot", lifespan=lifespan)
 
 # Register human interrupt router
 app.include_router(interrupt.router)
+
 
 @app.get("/")
 async def root():
@@ -581,6 +582,7 @@ async def health():
 
 # ── Demo Endpoint ─────────────────────────────────────────────────────
 
+
 class DemoRequest(BaseModel):
     analysis_id: str
     path: str  # path_a | path_b | path_c | path_d
@@ -588,12 +590,12 @@ class DemoRequest(BaseModel):
 
 def _build_demo_mocks(path: str):
     """Returns a configured mock GoBackendClient for the given demo path."""
-    from unittest.mock import MagicMock
-    from internal.errors import GoBackendError
 
     mock = MagicMock()
     mock.get_health.return_value = {"status": "ok"}
-    mock.get_services.return_value = {"services": ["payment-api", "order-service", "db-primary"]}
+    mock.get_services.return_value = {
+        "services": ["payment-api", "order-service", "db-primary"]
+    }
     mock.create_incident.return_value = {"incident_id": f"inc-demo-{path}"}
     mock.post_finding.return_value = {"finding_id": "f-demo"}
     mock.submit_report.return_value = {"report_id": "r-demo"}
@@ -605,26 +607,44 @@ def _build_demo_mocks(path: str):
         # All evidence strong → confidence 1.0 → autonomous completion
         mock.get_logs.return_value = {
             "logs": [
-                {"id": "log-001", "message": "ERROR: DB connection pool exhausted — all 50 connections in use", "level": "ERROR"},
-                {"id": "log-002", "message": "ERROR: Request timeout after 30s waiting for DB connection", "level": "ERROR"},
+                {
+                    "id": "log-001",
+                    "message": "ERROR: DB connection pool exhausted — all 50 connections in use",
+                    "level": "ERROR",
+                },
+                {
+                    "id": "log-002",
+                    "message": "ERROR: Request timeout after 30s waiting for DB connection",
+                    "level": "ERROR",
+                },
             ]
         }
         mock.query_metrics_batch.return_value = {
             "series": [
-                {"metric_name": "db_pool_waiting", "data_points": [
-                    {"timestamp": "2024-01-15T01:50:00Z", "value": "2.0"},
-                    {"timestamp": "2024-01-15T01:55:00Z", "value": "18.0"},
-                    {"timestamp": "2024-01-15T02:00:00Z", "value": "48.0"},
-                ]},
-                {"metric_name": "error_rate", "data_points": [
-                    {"timestamp": "2024-01-15T01:50:00Z", "value": "0.5"},
-                    {"timestamp": "2024-01-15T01:55:00Z", "value": "4.2"},
-                    {"timestamp": "2024-01-15T02:00:00Z", "value": "18.7"},
-                ]},
+                {
+                    "metric_name": "db_pool_waiting",
+                    "data_points": [
+                        {"timestamp": "2024-01-15T01:50:00Z", "value": "2.0"},
+                        {"timestamp": "2024-01-15T01:55:00Z", "value": "18.0"},
+                        {"timestamp": "2024-01-15T02:00:00Z", "value": "48.0"},
+                    ],
+                },
+                {
+                    "metric_name": "error_rate",
+                    "data_points": [
+                        {"timestamp": "2024-01-15T01:50:00Z", "value": "0.5"},
+                        {"timestamp": "2024-01-15T01:55:00Z", "value": "4.2"},
+                        {"timestamp": "2024-01-15T02:00:00Z", "value": "18.7"},
+                    ],
+                },
             ]
         }
         mock.search_runbooks.return_value = [
-            {"id": "rb-db-pool", "title": "DB Connection Pool Exhaustion Runbook", "similarity_score": 0.93}
+            {
+                "id": "rb-db-pool",
+                "title": "DB Connection Pool Exhaustion Runbook",
+                "similarity_score": 0.93,
+            }
         ]
 
     elif path == "path_b":
@@ -637,40 +657,61 @@ def _build_demo_mocks(path: str):
         }
         mock.query_metrics_batch.return_value = {
             "series": [
-                {"metric_name": "cpu", "data_points": [
-                    {"timestamp": "2024-01-15T02:00:00Z", "value": "94.0"},
-                ]},
-                {"metric_name": "error_rate", "data_points": [
-                    {"timestamp": "2024-01-15T02:00:00Z", "value": "0.3"},
-                ]},
+                {
+                    "metric_name": "cpu",
+                    "data_points": [
+                        {"timestamp": "2024-01-15T02:00:00Z", "value": "94.0"},
+                    ],
+                },
+                {
+                    "metric_name": "error_rate",
+                    "data_points": [
+                        {"timestamp": "2024-01-15T02:00:00Z", "value": "0.3"},
+                    ],
+                },
             ]
         }
         mock.search_runbooks.return_value = [
-            {"id": "rb-cpu", "title": "CPU Saturation Runbook", "similarity_score": 0.85}
+            {
+                "id": "rb-cpu",
+                "title": "CPU Saturation Runbook",
+                "similarity_score": 0.85,
+            }
         ]
 
     elif path == "path_c":
         # Strong logs and metrics, but no runbook match → RAG pause
         mock.get_logs.return_value = {
             "logs": [
-                {"id": "log-001", "message": "ERROR: payment gateway connection refused after 3 retries"},
+                {
+                    "id": "log-001",
+                    "message": "ERROR: payment gateway connection refused after 3 retries",
+                },
             ]
         }
         mock.query_metrics_batch.return_value = {
             "series": [
-                {"metric_name": "db_pool_waiting", "data_points": [
-                    {"timestamp": "2024-01-15T02:00:00Z", "value": "12.0"},
-                ]},
-                {"metric_name": "error_rate", "data_points": [
-                    {"timestamp": "2024-01-15T02:00:00Z", "value": "9.4"},
-                ]},
+                {
+                    "metric_name": "db_pool_waiting",
+                    "data_points": [
+                        {"timestamp": "2024-01-15T02:00:00Z", "value": "12.0"},
+                    ],
+                },
+                {
+                    "metric_name": "error_rate",
+                    "data_points": [
+                        {"timestamp": "2024-01-15T02:00:00Z", "value": "9.4"},
+                    ],
+                },
             ]
         }
         mock.search_runbooks.return_value = []  # no runbooks → RAG pause
 
     elif path == "path_d":
         # Backend completely unreachable → degraded mode
-        err = GoBackendError(status_code=503, message="Service unavailable", original_exception=None)
+        err = GoBackendError(
+            status_code=503, message="Service unavailable", original_exception=None
+        )
         mock.get_health.side_effect = err
         mock.get_services.side_effect = err
         mock.create_incident.side_effect = err
@@ -685,7 +726,6 @@ def _build_demo_mocks(path: str):
 
 def _run_demo_analysis(analysis_id: str, path: str) -> dict:
     """Runs the full graph with mocked Go backend. Called via threadpool."""
-    from unittest.mock import patch
     from workflow.graph import run_analysis
 
     alert_names = {
@@ -722,9 +762,8 @@ def _run_demo_analysis(analysis_id: str, path: str) -> dict:
 
 def _run_demo_resume(analysis_id: str, human_context: str) -> dict:
     """Resumes a paused HITL demo. Called via threadpool."""
-    from unittest.mock import patch, MagicMock
-    from workflow.graph import resume_analysis
     from internal.redis_client import get_analysis_state
+    from workflow.graph import resume_analysis
 
     state = get_analysis_state(analysis_id)
     if not state:
@@ -738,10 +777,16 @@ def _run_demo_resume(analysis_id: str, human_context: str) -> dict:
     mock_client.get_services.return_value = {"services": ["payment-api"]}
     mock_client.create_incident.return_value = {"incident_id": f"inc-{analysis_id}"}
     mock_client.get_logs.return_value = {
-        "logs": [{"id": "log-resume-1", "message": "ERROR: connection pool leak confirmed"}]
+        "logs": [
+            {"id": "log-resume-1", "message": "ERROR: connection pool leak confirmed"}
+        ]
     }
     mock_client.search_runbooks.return_value = [
-        {"id": "rb-resume", "title": "Connection Pool Recovery Runbook", "similarity_score": 0.91}
+        {
+            "id": "rb-resume",
+            "title": "Connection Pool Recovery Runbook",
+            "similarity_score": 0.91,
+        }
     ]
     mock_client.query_metrics_batch.return_value = {"series": []}
     mock_client.post_finding.return_value = {}
@@ -767,12 +812,16 @@ async def run_demo(req: DemoRequest):
         "status": result.get("status"),
         "waiting_at": result.get("waiting_at"),
         "requires_human": result.get("status") == "awaiting_human",
-        "confidence": result.get("correlation", {}).get("confidence", {}).get("score") if result.get("correlation") else None,
+        "confidence": result.get("correlation", {}).get("confidence", {}).get("score")
+        if result.get("correlation")
+        else None,
     }
 
 
 class ResumeRequest(BaseModel):
-    human_context: str = "Redis connection leak confirmed — pool settings need adjustment"
+    human_context: str = (
+        "Redis connection leak confirmed — pool settings need adjustment"
+    )
 
 
 @app.post("/api/v1/demo/{analysis_id}/resume")
@@ -782,14 +831,21 @@ async def resume_demo(analysis_id: str, req: ResumeRequest):
     Call this after /api/v1/demo returns requires_human=true.
     """
     try:
-        result = await run_in_threadpool(_run_demo_resume, analysis_id, req.human_context)
+        result = await run_in_threadpool(
+            _run_demo_resume, analysis_id, req.human_context
+        )
         return {
             "analysis_id": analysis_id,
             "status": result.get("status"),
-            "confidence": result.get("correlation", {}).get("confidence", {}).get("score") if result.get("correlation") else None,
+            "confidence": result.get("correlation", {})
+            .get("confidence", {})
+            .get("score")
+            if result.get("correlation")
+            else None,
         }
     except ValueError as e:
         return {"error": str(e)}
+
 
 @app.post("/api/v1/analyses", response_model=AnalysisResponse, status_code=202)
 async def start_analysis(req: AnalysisRequest):

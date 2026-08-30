@@ -18,12 +18,10 @@ Environment variables:
     SPIKE_DURATION_SECONDS  — how long each spike lasts         (default 10)
 """
 
-import json
 import logging
 import os
 import random
 import signal
-import sys
 import threading
 import time
 import uuid
@@ -33,29 +31,29 @@ import requests
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-BACKEND_URL     = os.getenv("GO_BACKEND_URL", "http://go-backend:8080")
-TOKEN           = os.getenv("SRE_INTERNAL_TOKEN", "")
-SERVICES        = os.getenv(
+BACKEND_URL = os.getenv("GO_BACKEND_URL", "http://go-backend:8080")
+TOKEN = os.getenv("SRE_INTERNAL_TOKEN", "")
+SERVICES = os.getenv(
     "SERVICES",
     "payment-api,auth-service,order-service,notification-service,api-gateway",
 ).split(",")
-LOG_RATE        = int(os.getenv("LOG_RATE_PER_SECOND", "20"))
-METRICS_RATE    = int(os.getenv("METRICS_RATE_PER_SECOND", "10"))
-ERROR_RATE      = float(os.getenv("ERROR_RATE", "0.04"))
-SPIKE_INTERVAL  = int(os.getenv("SPIKE_INTERVAL_SECONDS", "120"))
-SPIKE_DURATION  = int(os.getenv("SPIKE_DURATION_SECONDS", "10"))
+LOG_RATE = int(os.getenv("LOG_RATE_PER_SECOND", "20"))
+METRICS_RATE = int(os.getenv("METRICS_RATE_PER_SECOND", "10"))
+ERROR_RATE = float(os.getenv("ERROR_RATE", "0.04"))
+SPIKE_INTERVAL = int(os.getenv("SPIKE_INTERVAL_SECONDS", "120"))
+SPIKE_DURATION = int(os.getenv("SPIKE_DURATION_SECONDS", "10"))
 
 # Services that get hit during a correlated spike
-SPIKE_SERVICES  = ["payment-api", "order-service"]
+SPIKE_SERVICES = ["payment-api", "order-service"]
 
-LOG_BATCH_SIZE  = max(LOG_RATE, 20)
-METRIC_BATCH    = max(METRICS_RATE, 10)
+LOG_BATCH_SIZE = max(LOG_RATE, 20)
+METRIC_BATCH = max(METRICS_RATE, 10)
 
 # ── Log templates ─────────────────────────────────────────────────────────────
 
-LEVELS               = ["DEBUG", "INFO", "INFO", "INFO", "WARN", "ERROR", "FATAL"]
+LEVELS = ["DEBUG", "INFO", "INFO", "INFO", "WARN", "ERROR", "FATAL"]
 LEVEL_WEIGHTS_NORMAL = [5, 50, 50, 50, 10, 4, 1]
-LEVEL_WEIGHTS_SPIKE  = [1, 10, 10, 10, 15, 40, 14]
+LEVEL_WEIGHTS_SPIKE = [1, 10, 10, 10, 15, 40, 14]
 
 HOSTS = [
     "prod-us-east-1a-{svc}-01",
@@ -104,43 +102,58 @@ LOG_MESSAGES = {
     ],
 }
 
-METHODS      = ["GET", "POST", "PUT", "PATCH", "DELETE"]
-PATHS        = [
-    "/api/v1/orders", "/api/v1/orders/{oid}",
-    "/api/v1/payments", "/api/v1/payments/{oid}/capture",
-    "/api/v1/users/{uid}", "/api/v1/users/{uid}/profile",
-    "/api/v1/auth/login", "/api/v1/auth/refresh",
-    "/api/v1/notifications/send", "/api/v1/health",
+METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+PATHS = [
+    "/api/v1/orders",
+    "/api/v1/orders/{oid}",
+    "/api/v1/payments",
+    "/api/v1/payments/{oid}/capture",
+    "/api/v1/users/{uid}",
+    "/api/v1/users/{uid}/profile",
+    "/api/v1/auth/login",
+    "/api/v1/auth/refresh",
+    "/api/v1/notifications/send",
+    "/api/v1/health",
 ]
 METRICS_LIST = [
-    "http_request_duration_seconds", "db_pool_active_connections",
-    "order_processing_duration_ms", "cache_hit_ratio",
-    "queue_depth", "error_rate_1m",
+    "http_request_duration_seconds",
+    "db_pool_active_connections",
+    "order_processing_duration_ms",
+    "cache_hit_ratio",
+    "queue_depth",
+    "error_rate_1m",
 ]
-DEPENDENCIES = ["postgres", "redis", "kafka", "auth-service", "payment-gateway", "order-service"]
+DEPENDENCIES = [
+    "postgres",
+    "redis",
+    "kafka",
+    "auth-service",
+    "payment-gateway",
+    "order-service",
+]
 
 # ── Metric definitions per service ────────────────────────────────────────────
 
 # Normal baseline ranges: (min, max)
 METRIC_BASELINES = {
-    "http_error_rate":                   (0.01, 0.05),   # 1-5%
-    "http_request_duration_p99":         (50, 300),       # ms
-    "db_pool_active_connections":        (2, 14),
-    "queue_depth":                       (0, 50),
-    "memory_usage_bytes":                (200e6, 700e6),
-    "cpu_usage_percent":                 (10, 60),
-    "cache_hit_ratio":                   (0.75, 0.98),
+    "http_error_rate": (0.01, 0.05),  # 1-5%
+    "http_request_duration_p99": (50, 300),  # ms
+    "db_pool_active_connections": (2, 14),
+    "queue_depth": (0, 50),
+    "memory_usage_bytes": (200e6, 700e6),
+    "cpu_usage_percent": (10, 60),
+    "cache_hit_ratio": (0.75, 0.98),
 }
 
 # Spike overrides: (min, max) — extreme values during spike
 METRIC_SPIKES = {
-    "http_error_rate":            (0.35, 0.75),
-    "http_request_duration_p99":  (2000, 9000),
+    "http_error_rate": (0.35, 0.75),
+    "http_request_duration_p99": (2000, 9000),
     "db_pool_active_connections": (18, 20),
-    "queue_depth":                (500, 2000),
-    "memory_usage_bytes":         (900e6, 1.1e9),
-    "cpu_usage_percent":          (85, 100),
-    "cache_hit_ratio":            (0.05, 0.25),
+    "queue_depth": (500, 2000),
+    "memory_usage_bytes": (900e6, 1.1e9),
+    "cpu_usage_percent": (85, 100),
+    "cache_hit_ratio": (0.05, 0.25),
 }
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -152,19 +165,21 @@ log = logging.getLogger("simulator")
 
 running = True
 
+
 def _shutdown(signum, frame):
     global running
     log.info("Received signal %s, shutting down…", signum)
     running = False
+
 
 signal.signal(signal.SIGINT, _shutdown)
 signal.signal(signal.SIGTERM, _shutdown)
 
 # ── Shared spike state (thread-safe via lock) ─────────────────────────────────
 
-_spike_lock   = threading.Lock()
+_spike_lock = threading.Lock()
 _spike_active = False
-_last_spike   = time.time()
+_last_spike = time.time()
 
 
 def _update_spike_state() -> bool:
@@ -177,7 +192,7 @@ def _update_spike_state() -> bool:
             log.warning("🔥 SPIKE STARTING — correlated errors on %s", SPIKE_SERVICES)
         elif _spike_active and elapsed >= SPIKE_INTERVAL + SPIKE_DURATION:
             _spike_active = False
-            _last_spike   = time.time()
+            _last_spike = time.time()
             log.info("✓ Spike ended")
         return _spike_active
 
@@ -189,6 +204,7 @@ def is_spike() -> bool:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _rand_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -196,13 +212,17 @@ def _rand_id() -> str:
 def _fill_template(template: str, service: str) -> str:
     """Replace placeholders with realistic values."""
     return (
-        template
-        .replace("{svc}", service.split("-")[0])
+        template.replace("{svc}", service.split("-")[0])
         .replace("{uid}", _rand_id())
         .replace("{oid}", f"ORD-{_rand_id()[:8].upper()}")
         .replace("{sid}", _rand_id())
         .replace("{method}", random.choice(METHODS))
-        .replace("{path}", random.choice(PATHS).replace("{oid}", _rand_id()[:8]).replace("{uid}", _rand_id()[:8]))
+        .replace(
+            "{path}",
+            random.choice(PATHS)
+            .replace("{oid}", _rand_id()[:8])
+            .replace("{uid}", _rand_id()[:8]),
+        )
         .replace("{latency}", str(random.randint(2, 4500)))
         .replace("{dep}", random.choice(DEPENDENCIES))
         .replace("{metric}", random.choice(METRICS_LIST))
@@ -219,36 +239,38 @@ def now_iso() -> str:
 
 # ── Log generation ─────────────────────────────────────────────────────────────
 
+
 def generate_log_entry(service: str, spike: bool) -> dict:
     weights = LEVEL_WEIGHTS_SPIKE if spike else LEVEL_WEIGHTS_NORMAL
-    level   = random.choices(LEVELS, weights=weights, k=1)[0]
+    level = random.choices(LEVELS, weights=weights, k=1)[0]
 
     templates = LOG_MESSAGES.get(level, LOG_MESSAGES["INFO"])
-    message   = _fill_template(random.choice(templates), service)
-    host      = random.choice(HOSTS).replace("{svc}", service.split("-")[0])
+    message = _fill_template(random.choice(templates), service)
+    host = random.choice(HOSTS).replace("{svc}", service.split("-")[0])
 
     trace_id = span_id = None
     if level in ("INFO", "WARN", "ERROR") and random.random() < 0.3:
         trace_id = uuid.uuid4().hex
-        span_id  = uuid.uuid4().hex[:16]
+        span_id = uuid.uuid4().hex[:16]
 
     return {
         "timestamp": now_iso(),
-        "level":     level,
-        "service":   service,
-        "host":      host,
-        "message":   message,
-        "trace_id":  trace_id,
-        "span_id":   span_id,
+        "level": level,
+        "service": service,
+        "host": host,
+        "message": message,
+        "trace_id": trace_id,
+        "span_id": span_id,
         "attributes": {
-            "env":    "production",
+            "env": "production",
             "region": random.choice(["us-east-1", "us-west-2"]),
-            "pod":    f"{service}-{_rand_id()[:6]}",
+            "pod": f"{service}-{_rand_id()[:6]}",
         },
     }
 
 
 # ── Metric generation ──────────────────────────────────────────────────────────
+
 
 def generate_metric_points(service: str, spike_active: bool) -> list[dict]:
     """Return one data point per tracked metric for the given service."""
@@ -260,20 +282,23 @@ def generate_metric_points(service: str, spike_active: bool) -> list[dict]:
         else:
             value = random.uniform(lo, hi)
 
-        points.append({
-            "metric_name": metric_name,
-            "timestamp":   now_iso(),
-            "value":       round(value, 4),
-            "labels": {
-                "service": service,
-                "env":     "production",
-                "region":  random.choice(["us-east-1", "us-west-2"]),
-            },
-        })
+        points.append(
+            {
+                "metric_name": metric_name,
+                "timestamp": now_iso(),
+                "value": round(value, 4),
+                "labels": {
+                    "service": service,
+                    "env": "production",
+                    "region": random.choice(["us-east-1", "us-west-2"]),
+                },
+            }
+        )
     return points
 
 
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
+
 
 def send_logs(session: requests.Session, logs: list[dict]) -> bool:
     url = f"{BACKEND_URL}/internal/logs/ingest"
@@ -305,6 +330,7 @@ def send_metrics(session: requests.Session, metrics: list[dict]) -> bool:
 
 # ── Wait for backend ───────────────────────────────────────────────────────────
 
+
 def wait_for_backend(session: requests.Session) -> None:
     for attempt in range(30):
         if not running:
@@ -323,12 +349,13 @@ def wait_for_backend(session: requests.Session) -> None:
 
 # ── Log producer loop ─────────────────────────────────────────────────────────
 
+
 def log_loop(session: requests.Session) -> None:
     total_sent = 0
     log.info("Log producer starting — rate: %d logs/s", LOG_RATE)
     while running:
         cycle_start = time.time()
-        spike_now   = _update_spike_state()
+        spike_now = _update_spike_state()
 
         batch = []
         for _ in range(LOG_BATCH_SIZE):
@@ -354,13 +381,14 @@ def log_loop(session: requests.Session) -> None:
 
 # ── Metrics producer loop ─────────────────────────────────────────────────────
 
+
 def metrics_loop(session: requests.Session) -> None:
     total_sent = 0
     log.info("Metrics producer starting — rate: %d points/s", METRICS_RATE)
 
     while running:
         cycle_start = time.time()
-        spike_now   = is_spike()
+        spike_now = is_spike()
 
         batch: list[dict] = []
         for service in SERVICES:
@@ -381,12 +409,17 @@ def metrics_loop(session: requests.Session) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
     log.info(
         "Simulator starting — target: %s, log_rate: %d/s, metric_rate: %d/s, "
         "services: %s, spike_interval: %ds, spike_duration: %ds",
-        BACKEND_URL, LOG_RATE, METRICS_RATE, SERVICES,
-        SPIKE_INTERVAL, SPIKE_DURATION,
+        BACKEND_URL,
+        LOG_RATE,
+        METRICS_RATE,
+        SERVICES,
+        SPIKE_INTERVAL,
+        SPIKE_DURATION,
     )
     log.info("Correlated spike services: %s", SPIKE_SERVICES)
 
@@ -394,15 +427,17 @@ def main():
         log.warning("SRE_INTERNAL_TOKEN is not set — requests will likely fail auth")
 
     session = requests.Session()
-    session.headers.update({
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type":  "application/json",
-    })
+    session.headers.update(
+        {
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        }
+    )
 
     wait_for_backend(session)
 
     # Run logs + metrics producers in parallel threads
-    log_thread     = threading.Thread(target=log_loop, args=(session,), daemon=True)
+    log_thread = threading.Thread(target=log_loop, args=(session,), daemon=True)
     metrics_thread = threading.Thread(target=metrics_loop, args=(session,), daemon=True)
 
     log_thread.start()

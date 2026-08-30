@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -38,7 +38,10 @@ from workflow.graph import resume_analysis, run_analysis
 
 def make_series(name: str, values: list) -> dict:
     """Helper to mock metrics series."""
-    data_points = [{"timestamp": f"2026-03-29T10:{i:02d}:00Z", "value": val} for i, val in enumerate(values)]
+    data_points = [
+        {"timestamp": f"2026-03-29T10:{i:02d}:00Z", "value": val}
+        for i, val in enumerate(values)
+    ]
     return {"metric_name": name, "unit": "ratio", "data_points": data_points}
 
 
@@ -49,18 +52,37 @@ def _setup_standard_mocks(mock_classes):
         inst.get_health.return_value = {"status": "ok", "components": {}}
         inst.get_services.return_value = {"services": []}
         inst.create_incident.return_value = {"incident_id": "inc-001", "status": "open"}
-        inst.get_logs.return_value = {"logs": [{"message": "error DB connect", "timestamp": "2026-03-29T10:04:55Z", "level": "ERROR", "service": "payment-api", "trace_id": "trace-1"}]}
-        inst.search_runbooks.return_value = [{"runbook_id": "RB-100", "title": "Troubleshoot", "content": "Check DB", "similarity_score": 0.95}]
+        inst.get_logs.return_value = {
+            "logs": [
+                {
+                    "message": "error DB connect",
+                    "timestamp": "2026-03-29T10:04:55Z",
+                    "level": "ERROR",
+                    "service": "payment-api",
+                    "trace_id": "trace-1",
+                }
+            ]
+        }
+        inst.search_runbooks.return_value = [
+            {
+                "runbook_id": "RB-100",
+                "title": "Troubleshoot",
+                "content": "Check DB",
+                "similarity_score": 0.95,
+            }
+        ]
         inst.post_finding.return_value = {"finding_id": "f-1"}
         inst.submit_report.return_value = {"report_id": "r-1"}
-        inst._request.return_value = MagicMock(json=lambda: {"incidents": [], "pagination": {}})
+        inst._request.return_value = MagicMock(
+            json=lambda: {"incidents": [], "pagination": {}}
+        )
         inst.query_metrics_batch.return_value = {"series": []}
         inst.get_incidents.return_value = {"incidents": []}
 
 
 class TestCorrelationLogic(unittest.TestCase):
     """Tests for correlation agent logic and root cause inference."""
-    
+
     def test_find_spike_time_error_rate(self):
         """Test finding spike time from error rate series."""
         series = make_series("error_rate", [0.01, 0.02, 0.08, 0.20])
@@ -121,9 +143,23 @@ class TestCorrelationLogic(unittest.TestCase):
 
     def test_historical_incident_matching(self):
         """Test finding similar historical incidents based on affected services."""
-        past = [{"incident_id": "inc-1", "affected_services": ["payment-api", "order-service"], "similarity_score": 1.0},
-                {"incident_id": "inc-2", "affected_services": ["auth-service"], "similarity_score": 0.5},
-                {"incident_id": "inc-3", "affected_services": ["api-gateway", "payment-api", "order-service"], "similarity_score": 1.0}]
+        past = [
+            {
+                "incident_id": "inc-1",
+                "affected_services": ["payment-api", "order-service"],
+                "similarity_score": 1.0,
+            },
+            {
+                "incident_id": "inc-2",
+                "affected_services": ["auth-service"],
+                "similarity_score": 0.5,
+            },
+            {
+                "incident_id": "inc-3",
+                "affected_services": ["api-gateway", "payment-api", "order-service"],
+                "similarity_score": 1.0,
+            },
+        ]
         matches = find_historical_matches(past, ["payment-api", "order-service"])
         assert len(matches) == 2
         assert matches[0]["incident_id"] == "inc-1"
@@ -133,7 +169,12 @@ class TestCorrelationLogic(unittest.TestCase):
         return {
             "analysis_id": "test-analysis-001",
             "incident_id": "inc-current-001",
-            "alert": {"name": "HighErrorRate", "severity": "critical", "fired_at": "2026-03-29T10:00:00Z", "affected_services": ["payment-api"]},
+            "alert": {
+                "name": "HighErrorRate",
+                "severity": "critical",
+                "fired_at": "2026-03-29T10:00:00Z",
+                "affected_services": ["payment-api"],
+            },
             "findings": [],
             "incident_events": [],
             "current_agent": "correlation_agent",
@@ -143,11 +184,22 @@ class TestCorrelationLogic(unittest.TestCase):
     def test_correlation_agent_success(self, mock_client_class):
         """Test correlation agent node standard successful execution."""
         mock_client = mock_client_class.return_value
-        mock_client.query_metrics_batch.return_value = {"series": [make_series("db_pool_waiting", [0.0, 2.0, 5.0]), make_series("error_rate", [0.01, 0.01, 0.40]), make_series("cpu", [15.0]*3), make_series("memory", [30.0]*3)]}
-        mock_client.get_incidents.return_value = {"incidents": [{"incident_id": "inc-past-999", "affected_services": ["payment-api"]}]}
-        
+        mock_client.query_metrics_batch.return_value = {
+            "series": [
+                make_series("db_pool_waiting", [0.0, 2.0, 5.0]),
+                make_series("error_rate", [0.01, 0.01, 0.40]),
+                make_series("cpu", [15.0] * 3),
+                make_series("memory", [30.0] * 3),
+            ]
+        }
+        mock_client.get_incidents.return_value = {
+            "incidents": [
+                {"incident_id": "inc-past-999", "affected_services": ["payment-api"]}
+            ]
+        }
+
         new_state = correlation_agent_node(self._get_correlation_state())
-        
+
         assert new_state["current_agent"] == "report_agent"
         assert new_state["root_cause"]["type"] == "DB_EXHAUSTION"
         assert mock_client.post_finding.called
@@ -158,9 +210,9 @@ class TestCorrelationLogic(unittest.TestCase):
         mock_client = mock_client_class.return_value
         mock_client.query_metrics_batch.side_effect = Exception("Service unavailable")
         mock_client.get_incidents.return_value = {"incidents": []}
-        
+
         new_state = correlation_agent_node(self._get_correlation_state())
-        
+
         assert new_state["current_agent"] == "report_agent"
         assert new_state["metrics_data"] == {}
         assert new_state["correlation_finding"]["reason"] == "METRIC_QUERY_FAILED"
@@ -173,7 +225,12 @@ class TestEvidenceCollection(unittest.TestCase):
         """Helper to get base state for evidence agent tests."""
         return {
             "analysis_id": "test-analysis-123",
-            "alert": {"name": "HighErrorRate", "severity": "critical", "affected_services": ["payment-api"], "fired_at": "2026-03-29T10:00:00Z"},
+            "alert": {
+                "name": "HighErrorRate",
+                "severity": "critical",
+                "affected_services": ["payment-api"],
+                "fired_at": "2026-03-29T10:00:00Z",
+            },
             "findings": [],
             "incident_events": [],
             "status": "running",
@@ -187,12 +244,16 @@ class TestEvidenceCollection(unittest.TestCase):
     def test_evidence_agent_success(self, mock_helpers, mock_rag, mock_corr, mock_log):
         """Test evidence agent successfully collects all evidence sources."""
         _setup_standard_mocks([mock_helpers, mock_rag, mock_corr, mock_log])
-        mock_helpers.return_value.get_services.return_value = {"services": [{"name": "payment-api"}]}
+        mock_helpers.return_value.get_services.return_value = {
+            "services": [{"name": "payment-api"}]
+        }
         mock_log.return_value.get_log_anomalies.return_value = {"anomalous_windows": []}
-        mock_corr.return_value.query_metrics_batch.return_value = {"series": [make_series("error_rate", [0.01, 0.40])]}
-        
+        mock_corr.return_value.query_metrics_batch.return_value = {
+            "series": [make_series("error_rate", [0.01, 0.40])]
+        }
+
         result = evidence_agent_node(self._get_evidence_state())
-        
+
         ev = result["evidence"]
         self.assertEqual(ev["metadata"]["collection_status"]["logs"], "success")
         self.assertEqual(ev["metadata"]["collection_status"]["metrics"], "success")
@@ -202,15 +263,19 @@ class TestEvidenceCollection(unittest.TestCase):
     @patch("agents.correlation_agent.GoBackendClient")
     @patch("agents.rag_agent.GoBackendClient")
     @patch("agents.helpers.GoBackendClient")
-    def test_evidence_agent_fault_tolerance(self, mock_helpers, mock_rag, mock_corr, mock_log):
+    def test_evidence_agent_fault_tolerance(
+        self, mock_helpers, mock_rag, mock_corr, mock_log
+    ):
         """Test evidence agent gracefully handles failures in individual collectors."""
         _setup_standard_mocks([mock_helpers, mock_rag, mock_corr, mock_log])
         mock_log.return_value.get_log_anomalies.return_value = {"anomalous_windows": []}
-        mock_rag.return_value.search_runbooks.side_effect = GoBackendError(500, "Vector DB index failed", None)
-        
+        mock_rag.return_value.search_runbooks.side_effect = GoBackendError(
+            500, "Vector DB index failed", None
+        )
+
         result = evidence_agent_node(self._get_evidence_state())
         ev = result["evidence"]
-        
+
         self.assertEqual(ev["metadata"]["collection_status"]["logs"], "success")
         self.assertEqual(ev["metadata"]["collection_status"]["rag"], "failed")
         self.assertEqual(result["current_agent"], "report_agent")
@@ -221,10 +286,31 @@ class TestEvidenceQuality(unittest.TestCase):
 
     def setUp(self):
         self.base_ev = {
-            "metadata": {"collection_status": {"logs": "success", "metrics": "success", "rag": "success", "topology": "success"}},
-            "logs": {"findings": [{"type": "log_anomaly", "degraded": False, "evidence": {"log_ids": ["123"]}}]},
-            "metrics": {"metrics_query_failed": False, "metrics_response": {"series": [make_series("error_rate", [0.0, 0.0, 0.8, 0.8])]}},
-            "rag": {"findings": [{"type": "runbook", "similarity_score": 0.9}]}, "topology": {"services": [{"name": "payment-api"}]}
+            "metadata": {
+                "collection_status": {
+                    "logs": "success",
+                    "metrics": "success",
+                    "rag": "success",
+                    "topology": "success",
+                }
+            },
+            "logs": {
+                "findings": [
+                    {
+                        "type": "log_anomaly",
+                        "degraded": False,
+                        "evidence": {"log_ids": ["123"]},
+                    }
+                ]
+            },
+            "metrics": {
+                "metrics_query_failed": False,
+                "metrics_response": {
+                    "series": [make_series("error_rate", [0.0, 0.0, 0.8, 0.8])]
+                },
+            },
+            "rag": {"findings": [{"type": "runbook", "similarity_score": 0.9}]},
+            "topology": {"services": [{"name": "payment-api"}]},
         }
         self.base_state = {}
 
@@ -244,17 +330,30 @@ class TestEvidenceQuality(unittest.TestCase):
 
     def test_conflicting_evidence(self):
         """Test evidence quality is penalized on conflicting signals."""
-        self.base_ev["metrics"]["metrics_response"]["series"][0]["data_points"] = [{"value": 0.0}, {"value": 0.0}]
+        self.base_ev["metrics"]["metrics_response"]["series"][0]["data_points"] = [
+            {"value": 0.0},
+            {"value": 0.0},
+        ]
         res = analyze_evidence_quality(self.base_ev, self.base_state)
         self.assertEqual(len(res["conflicts"]), 1)
         self.assertAlmostEqual(res["quality_score"], 0.8)
 
     def test_risk_scoring(self):
         """Test risk level calculation based on evidence and alert severity."""
-        r_crit = calculate_risk(self.base_ev, {"type": "DB_TIMEOUT", "confidence": 0.8}, ["payment-api"], {"severity": "medium"})
+        r_crit = calculate_risk(
+            self.base_ev,
+            {"type": "DB_TIMEOUT", "confidence": 0.8},
+            ["payment-api"],
+            {"severity": "medium"},
+        )
         self.assertEqual(r_crit["level"], "CRITICAL")
         weak_ev = {"metadata": {"collection_status": {"metrics": "success"}}}
-        r_low = calculate_risk(weak_ev, {"type": "UNKNOWN", "confidence": 0.2}, ["bg-worker"], {"severity": "low"})
+        r_low = calculate_risk(
+            weak_ev,
+            {"type": "UNKNOWN", "confidence": 0.2},
+            ["bg-worker"],
+            {"severity": "low"},
+        )
         self.assertEqual(r_low["level"], "LOW")
 
 
@@ -263,31 +362,77 @@ class TestReportGeneration(unittest.TestCase):
 
     def setUp(self):
         self.base_state: AnalysisState = {
-            "analysis_id": "test-1", "incident_id": "inc-1", "incident_title": "DB Issue",
-            "alert": {"name": "HighErrorRate", "severity": "critical", "fired_at": "2026-03-29T10:01:30Z", "affected_services": ["payment-api"]},
+            "analysis_id": "test-1",
+            "incident_id": "inc-1",
+            "incident_title": "DB Issue",
+            "alert": {
+                "name": "HighErrorRate",
+                "severity": "critical",
+                "fired_at": "2026-03-29T10:01:30Z",
+                "affected_services": ["payment-api"],
+            },
             "findings": [
-                {"agent": "log_query_agent", "type": "log_anomaly", "timestamp": "2026-03-29T10:02:15Z"},
-                {"agent": "rag_agent", "type": "runbook", "runbook_id": "rb-1", "similarity_score": 0.94, "timestamp": "2026-03-29T10:02:30Z", "title": "Runbook", "summary": "Fix"},
-                {"agent": "rag_agent", "type": "runbook", "runbook_id": "rb-4", "similarity_score": 0.81, "timestamp": "2026-03-29T10:02:40Z", "title": "Runbook 2", "summary": "Fix 2"},
-                {"agent": "correlation_agent", "type": "historical_correlation", "created_at": "2026-03-29T10:03:00Z"}
+                {
+                    "agent": "log_query_agent",
+                    "type": "log_anomaly",
+                    "timestamp": "2026-03-29T10:02:15Z",
+                },
+                {
+                    "agent": "rag_agent",
+                    "type": "runbook",
+                    "runbook_id": "rb-1",
+                    "similarity_score": 0.94,
+                    "timestamp": "2026-03-29T10:02:30Z",
+                    "title": "Runbook",
+                    "summary": "Fix",
+                },
+                {
+                    "agent": "rag_agent",
+                    "type": "runbook",
+                    "runbook_id": "rb-4",
+                    "similarity_score": 0.81,
+                    "timestamp": "2026-03-29T10:02:40Z",
+                    "title": "Runbook 2",
+                    "summary": "Fix 2",
+                },
+                {
+                    "agent": "correlation_agent",
+                    "type": "historical_correlation",
+                    "created_at": "2026-03-29T10:03:00Z",
+                },
             ],
-            "metrics_data": {"db_pool_waiting": make_series("db", [0,3,5,5]), "error_rate": make_series("err", [0,0,0.25,0.6])},
-            "root_cause": {"type": "DB_EXHAUSTION", "description": "DB saturation", "confidence": 0.92, "affected_services": ["payment-api"]},
-            "current_agent": "correlation_agent", "incident_events": []
+            "metrics_data": {
+                "db_pool_waiting": make_series("db", [0, 3, 5, 5]),
+                "error_rate": make_series("err", [0, 0, 0.25, 0.6]),
+            },
+            "root_cause": {
+                "type": "DB_EXHAUSTION",
+                "description": "DB saturation",
+                "confidence": 0.92,
+                "affected_services": ["payment-api"],
+            },
+            "current_agent": "correlation_agent",
+            "incident_events": [],
         }
 
     def test_timeline_ordering(self):
         """Test timeline events are strictly chronological."""
         tl = build_timeline(self.base_state)
-        times = [datetime.fromisoformat(item["time"].replace("Z", "+00:00")) for item in tl]
+        times = [
+            datetime.fromisoformat(item["time"].replace("Z", "+00:00")) for item in tl
+        ]
         for i in range(len(times) - 1):
             assert times[i] <= times[i + 1]
 
     def test_metric_spike_before_alert(self):
         """Test timeline shows metric spikes before alert if they occurred first."""
         tl = build_timeline(self.base_state)
-        db_idx = next(i for i, item in enumerate(tl) if "started increasing" in item["event"])
-        alert_idx = next(i for i, item in enumerate(tl) if "alert fired" in item["event"])
+        db_idx = next(
+            i for i, item in enumerate(tl) if "started increasing" in item["event"]
+        )
+        alert_idx = next(
+            i for i, item in enumerate(tl) if "alert fired" in item["event"]
+        )
         assert db_idx < alert_idx
 
     def test_root_cause_population(self):
@@ -310,7 +455,9 @@ class TestReportGeneration(unittest.TestCase):
 
     def test_executive_summary_generation(self):
         """Test executive summary includes key components."""
-        summary = build_executive_summary(self.base_state, build_suggested_fixes(self.base_state))
+        summary = build_executive_summary(
+            self.base_state, build_suggested_fixes(self.base_state)
+        )
         assert "Payment-api experienced issues" in summary
 
     def test_incident_report_schema(self):
@@ -348,7 +495,10 @@ class TestGraphEvents(unittest.TestCase):
 
     def _get_events(self, analysis_id):
         """Helper to get events for an analysis."""
-        return [json.loads(ev) for ev in reversed(self.r.lrange(f"analysis:{analysis_id}:events", 0, -1))]
+        return [
+            json.loads(ev)
+            for ev in reversed(self.r.lrange(f"analysis:{analysis_id}:events", 0, -1))
+        ]
 
     @patch("agents.supervisor.GoBackendClient")
     @patch("agents.log_query_agent.GoBackendClient")
@@ -361,14 +511,23 @@ class TestGraphEvents(unittest.TestCase):
         """Test that a successful run emits properly formatted running/completed events."""
         _setup_standard_mocks(mock_classes)
         mock_calc.return_value = {"score": 0.85, "level": "HIGH", "reason": "OK"}
-        
-        state = {"analysis_id": "test-1", "status": "running", "alert": {"alert_id": "a-1", "name": "DB CPU", "affected_services": ["payment-api"], "fired_at": "2026"}}
+
+        state = {
+            "analysis_id": "test-1",
+            "status": "running",
+            "alert": {
+                "alert_id": "a-1",
+                "name": "DB CPU",
+                "affected_services": ["payment-api"],
+                "fired_at": "2026",
+            },
+        }
         res = run_analysis(state)
-        
+
         self.assertEqual(res.get("status"), "completed")
         events = self._get_events("test-1")
         self.assertEqual(events[0]["event_type"], "analysis.started")
-        
+
         completed = [e for e in events if e.get("event_type") == "analysis.completed"]
         self.assertEqual(len(completed), 1)
 
@@ -377,56 +536,104 @@ class TestGraphEvents(unittest.TestCase):
         """Test that a crashed node correctly emits a failed event."""
         _setup_standard_mocks([mock_supervisor_client])
         mock_node = MagicMock(side_effect=RuntimeError("DB timeout"))
-        
-        state = {"analysis_id": "test-fail", "status": "running", "alert": {"alert_id": "a", "name": "N", "affected_services": ["payment-api"], "fired_at": "2026"}}
-        
-        with patch.dict("workflow.graph.NODE_FUNCS", {"evidence_agent_node": mock_node}), self.assertRaises(RuntimeError):
+
+        state = {
+            "analysis_id": "test-fail",
+            "status": "running",
+            "alert": {
+                "alert_id": "a",
+                "name": "N",
+                "affected_services": ["payment-api"],
+                "fired_at": "2026",
+            },
+        }
+
+        with (
+            patch.dict("workflow.graph.NODE_FUNCS", {"evidence_agent_node": mock_node}),
+            self.assertRaises(RuntimeError),
+        ):
             run_analysis(state)
-                
+
         events = self._get_events("test-fail")
-        failed = [e for e in events if e["node"] == "evidence_agent" and e["status"] == "failed"]
+        failed = [
+            e
+            for e in events
+            if e["node"] == "evidence_agent" and e["status"] == "failed"
+        ]
         self.assertEqual(len(failed), 1)
 
     @patch("agents.supervisor.GoBackendClient")
-    @patch.dict("workflow.graph.NODE_FUNCS",
-                {"evidence_agent_node": MagicMock(return_value={
-                    "findings": [], "status": "completed"
-                })})
+    @patch.dict(
+        "workflow.graph.NODE_FUNCS",
+        {
+            "evidence_agent_node": MagicMock(
+                return_value={"findings": [], "status": "completed"}
+            )
+        },
+    )
     def test_concurrent_analyses_isolation(self, mock_sup):
         """Test event isolation for concurrent analyses."""
         _setup_standard_mocks([mock_sup])
-        
-        run_analysis({
-            "analysis_id": "c-A", "status": "running",
-            "alert": {"alert_id": "a", "name": "A",
-                      "affected_services": ["s"], "fired_at": "2026"}
-        })
-        run_analysis({
-            "analysis_id": "c-B", "status": "running",
-            "alert": {"alert_id": "b", "name": "B",
-                      "affected_services": ["s"], "fired_at": "2026"}
-        })
-        
+
+        run_analysis(
+            {
+                "analysis_id": "c-A",
+                "status": "running",
+                "alert": {
+                    "alert_id": "a",
+                    "name": "A",
+                    "affected_services": ["s"],
+                    "fired_at": "2026",
+                },
+            }
+        )
+        run_analysis(
+            {
+                "analysis_id": "c-B",
+                "status": "running",
+                "alert": {
+                    "alert_id": "b",
+                    "name": "B",
+                    "affected_services": ["s"],
+                    "fired_at": "2026",
+                },
+            }
+        )
+
         events_a = self._get_events("c-A")
         events_b = self._get_events("c-B")
         self.assertTrue(all(e["analysis_id"] == "c-A" for e in events_a))
         self.assertTrue(all(e["analysis_id"] == "c-B" for e in events_b))
 
     @patch("agents.supervisor.GoBackendClient")
-    @patch.dict("workflow.graph.NODE_FUNCS",
-                {"evidence_agent_node": MagicMock(return_value={
-                    "analysis_id": "ws-1", "status": "completed",
-                    "findings": []
-                })})
+    @patch.dict(
+        "workflow.graph.NODE_FUNCS",
+        {
+            "evidence_agent_node": MagicMock(
+                return_value={
+                    "analysis_id": "ws-1",
+                    "status": "completed",
+                    "findings": [],
+                }
+            )
+        },
+    )
     def test_websocket_event_streaming(self, mock_sup):
         """Test WebSocket client receives live updates and historical replays."""
         _setup_standard_mocks([mock_sup])
-        run_analysis({
-            "analysis_id": "ws-1", "status": "running",
-            "alert": {"alert_id": "ws", "name": "WS",
-                      "affected_services": ["s"], "fired_at": "2026"}
-        })
-        
+        run_analysis(
+            {
+                "analysis_id": "ws-1",
+                "status": "running",
+                "alert": {
+                    "alert_id": "ws",
+                    "name": "WS",
+                    "affected_services": ["s"],
+                    "fired_at": "2026",
+                },
+            }
+        )
+
         with self.client.websocket_connect("/ws/analysis/ws-1") as ws:
             first = ws.receive_json()
             self.assertEqual(first["analysis_id"], "ws-1")
@@ -447,20 +654,23 @@ class TestHumanReviewNode(unittest.TestCase):
         """Test analysis correctly suspends for human review on low confidence and resumes."""
         _setup_standard_mocks(mock_classes)
         mock_calc.return_value = {"score": 0.3, "level": "LOW", "reason": "No logs"}
-        
+
         state = {"analysis_id": "hr-1", "incident_title": "Spike"}
         res = run_analysis(state)
-        
+
         self.assertEqual(res.get("status"), "awaiting_human")
         self.assertEqual(res.get("waiting_at"), "confidence_review")
-        
-        mock_calc.return_value = {"score": 0.85, "level": "HIGH", "reason": "Human input"}
+
+        mock_calc.return_value = {
+            "score": 0.85,
+            "level": "HIGH",
+            "reason": "Human input",
+        }
         resume_payload = dict(res)
         resume_payload["human_context"] = "Confirmed"
-        
+
         resumed = resume_analysis(resume_payload)
         self.assertEqual(resumed.get("status"), "completed")
-
 
 
 class TestProductionEdgeCases(unittest.TestCase):
@@ -469,7 +679,8 @@ class TestProductionEdgeCases(unittest.TestCase):
     def setUp(self):
         self.r = _get_redis()
         keys = self.r.keys("analysis:prod-scenario-*")
-        if keys: self.r.delete(*keys)
+        if keys:
+            self.r.delete(*keys)
 
     def tearDown(self):
         self.setUp()
@@ -485,17 +696,37 @@ class TestProductionEdgeCases(unittest.TestCase):
         """Test two simultaneous alerts are isolated and successfully processed."""
         _setup_standard_mocks(mock_classes)
         mock_calc.return_value = {"score": 0.85, "level": "HIGH", "reason": "OK"}
-        
+
         ts_a = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        state_a = {"analysis_id": "prod-scenario-simul-A", "status": "running", "triggered_at": ts_a, "alert": {"alert_id": "a", "name": "DB", "affected_services": ["shared-db"], "fired_at": ts_a}}
-        state_b = {"analysis_id": "prod-scenario-simul-B", "status": "running", "triggered_at": ts_a, "alert": {"alert_id": "b", "name": "Slow", "affected_services": ["shared-db"], "fired_at": ts_a}}
-        
+        state_a = {
+            "analysis_id": "prod-scenario-simul-A",
+            "status": "running",
+            "triggered_at": ts_a,
+            "alert": {
+                "alert_id": "a",
+                "name": "DB",
+                "affected_services": ["shared-db"],
+                "fired_at": ts_a,
+            },
+        }
+        state_b = {
+            "analysis_id": "prod-scenario-simul-B",
+            "status": "running",
+            "triggered_at": ts_a,
+            "alert": {
+                "alert_id": "b",
+                "name": "Slow",
+                "affected_services": ["shared-db"],
+                "fired_at": ts_a,
+            },
+        }
+
         res_a = run_analysis(state_a)
         res_b = run_analysis(state_b)
-        
+
         self.assertEqual(res_a.get("status"), "completed")
         self.assertEqual(res_b.get("status"), "completed")
-        
+
         ckpt_a = self.r.get("analysis:prod-scenario-simul-A:checkpoint")
         ckpt_b = self.r.get("analysis:prod-scenario-simul-B:checkpoint")
         self.assertNotEqual(ckpt_a, ckpt_b)
@@ -510,15 +741,33 @@ class TestProductionEdgeCases(unittest.TestCase):
         """Test unexpected failures do not corrupt state of concurrent healthy analyses."""
         _setup_standard_mocks(mock_classes)
         mock_calc.side_effect = RuntimeError("Failure")
-        
-        state = {"analysis_id": "prod-scenario-fail-001", "status": "running", "alert": {"alert_id": "a", "name": "Fail", "affected_services": ["svc"], "fired_at": "2026"}}
-        
+
+        state = {
+            "analysis_id": "prod-scenario-fail-001",
+            "status": "running",
+            "alert": {
+                "alert_id": "a",
+                "name": "Fail",
+                "affected_services": ["svc"],
+                "fired_at": "2026",
+            },
+        }
+
         with self.assertRaises(RuntimeError):
             run_analysis(state)
-            
+
         mock_calc.side_effect = None
         mock_calc.return_value = {"score": 0.9, "level": "HIGH", "reason": "OK"}
-        state_healthy = {"analysis_id": "prod-scenario-healthy-001", "status": "running", "alert": {"alert_id": "b", "name": "OK", "affected_services": ["svc"], "fired_at": "2026"}}
-        
+        state_healthy = {
+            "analysis_id": "prod-scenario-healthy-001",
+            "status": "running",
+            "alert": {
+                "alert_id": "b",
+                "name": "OK",
+                "affected_services": ["svc"],
+                "fired_at": "2026",
+            },
+        }
+
         res_healthy = run_analysis(state_healthy)
         self.assertEqual(res_healthy.get("status"), "completed")
