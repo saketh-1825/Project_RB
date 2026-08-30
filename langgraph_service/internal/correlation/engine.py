@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-def find_spike_time(metric_series: Optional[Dict[str, Any]]) -> Optional[datetime]:
+
+def find_spike_time(metric_series: dict[str, Any] | None) -> datetime | None:
     """
     Finds the first timestamp where a metric spikes.
     Thresholds are mapped dynamically based on metric names.
@@ -60,14 +61,22 @@ def find_spike_time(metric_series: Optional[Dict[str, Any]]) -> Optional[datetim
     return None
 
 
-def infer_root_cause(metrics: Dict[str, Any], affected_services: Optional[List[str]] = None) -> Dict[str, Any]:
+def infer_root_cause(
+    metrics: dict[str, Any], affected_services: list[str] | None = None
+) -> dict[str, Any]:
     """
     Infers the probable root cause of an incident based on metric rules.
     """
     error_rate_series = metrics.get("error_rate") or metrics.get("http_error_rate")
     cpu_series = metrics.get("cpu") or metrics.get("process_cpu_usage")
-    memory_series = metrics.get("memory") or metrics.get("process_memory_bytes") or metrics.get("process_memory_usage")
-    db_pool_waiting_series = metrics.get("db_pool_waiting") or metrics.get("db_pool_waiting_connections")
+    memory_series = (
+        metrics.get("memory")
+        or metrics.get("process_memory_bytes")
+        or metrics.get("process_memory_usage")
+    )
+    db_pool_waiting_series = metrics.get("db_pool_waiting") or metrics.get(
+        "db_pool_waiting_connections"
+    )
 
     err_spike = find_spike_time(error_rate_series)
     db_spike = find_spike_time(db_pool_waiting_series)
@@ -82,10 +91,7 @@ def infer_root_cause(metrics: Dict[str, Any], affected_services: Optional[List[s
             "description": "Database connection pool saturation caused request failures",
             "confidence": 0.92,
             "affected_services": services,
-            "supporting_metrics": [
-                "db_pool_waiting",
-                "error_rate"
-            ]
+            "supporting_metrics": ["db_pool_waiting", "error_rate"],
         }
 
     # RULE 2: CPU Pressure
@@ -100,16 +106,15 @@ def infer_root_cause(metrics: Dict[str, Any], affected_services: Optional[List[s
             "description": "High CPU utilization coinciding with request error spike",
             "confidence": 0.80,
             "affected_services": services,
-            "supporting_metrics": [
-                "cpu",
-                "error_rate"
-            ]
+            "supporting_metrics": ["cpu", "error_rate"],
         }
 
     # RULE 3: Memory Pressure
     max_mem = 0.0
     if memory_series and memory_series.get("data_points"):
-        max_mem = max(float(pt.get("value", 0.0)) for pt in memory_series["data_points"])
+        max_mem = max(
+            float(pt.get("value", 0.0)) for pt in memory_series["data_points"]
+        )
 
     mem_exceeded = max_mem > 90.0 or (0.90 < max_mem <= 1.0)
     if mem_exceeded and err_spike is not None:
@@ -118,10 +123,7 @@ def infer_root_cause(metrics: Dict[str, Any], affected_services: Optional[List[s
             "description": "High memory utilization coinciding with request error spike",
             "confidence": 0.80,
             "affected_services": services,
-            "supporting_metrics": [
-                "memory",
-                "error_rate"
-            ]
+            "supporting_metrics": ["memory", "error_rate"],
         }
 
     # RULE 4: Default Fallback (Unknown)
@@ -130,14 +132,13 @@ def infer_root_cause(metrics: Dict[str, Any], affected_services: Optional[List[s
         "description": "Unable to correlate metrics spike with a known signature",
         "confidence": 0.30,
         "affected_services": services,
-        "supporting_metrics": []
+        "supporting_metrics": [],
     }
 
 
 def find_historical_matches(
-    incidents: List[Dict[str, Any]],
-    current_services: List[str]
-) -> List[Dict[str, Any]]:
+    incidents: list[dict[str, Any]], current_services: list[str]
+) -> list[dict[str, Any]]:
     """
     Identifies and sorts past incidents based on affected services overlap.
     """
@@ -154,13 +155,17 @@ def find_historical_matches(
         overlap = past_services & current_services_set
         if overlap:
             similarity = round(len(overlap) / max(len(current_services_set), 1), 2)
-            similar_past_incidents.append({
-                "incident_id": past.get("incident_id"),
-                "title": past.get("title"),
-                "similarity_score": similarity,
-                "resolution": past.get("root_cause_summary") or past.get("resolution") or "No resolution recorded",
-                "affected_services": past.get("affected_services", [])
-            })
+            similar_past_incidents.append(
+                {
+                    "incident_id": past.get("incident_id"),
+                    "title": past.get("title"),
+                    "similarity_score": similarity,
+                    "resolution": past.get("root_cause_summary")
+                    or past.get("resolution")
+                    or "No resolution recorded",
+                    "affected_services": past.get("affected_services", []),
+                }
+            )
 
     # Sort similar incidents by similarity score descending
     similar_past_incidents.sort(key=lambda x: x["similarity_score"], reverse=True)
@@ -168,25 +173,23 @@ def find_historical_matches(
 
 
 def build_correlation_finding(
-    root_cause: Dict[str, Any],
-    metric_names: Optional[List[str]] = None,
-    time_range: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+    root_cause: dict[str, Any],
+    metric_names: list[str] | None = None,
+    time_range: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """
     Assembles a contract-compliant finding object.
     """
     if metric_names is None:
         metric_names = ["error_rate", "cpu", "memory", "db_pool_waiting"]
 
-    evidence: Dict[str, Any] = {
-        "metric_names": metric_names
-    }
-    
+    evidence: dict[str, Any] = {"metric_names": metric_names}
+
     time_range_dict = None
     if time_range:
         time_range_dict = {
             "from": time_range.get("from") or time_range.get("from_time"),
-            "to": time_range.get("to") or time_range.get("to_time")
+            "to": time_range.get("to") or time_range.get("to_time"),
         }
         evidence["time_range"] = time_range_dict
 
@@ -202,5 +205,5 @@ def build_correlation_finding(
         "metric_names": metric_names,
         "time_range": time_range_dict,
         "evidence": evidence,
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }

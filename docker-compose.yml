@@ -242,7 +242,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
       - "--web.enable-lifecycle"
-    profiles: [go, full]
+    profiles: [full]
 
   alertmanager:
     image: prom/alertmanager:v0.26.0
@@ -255,7 +255,7 @@ services:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
     depends_on:
       - prometheus
-    profiles: [go, full]
+    profiles: [full]
 
   # ──────────────────────────────────────────────────────────
   #  LOG + METRIC SIMULATOR  (profile: go, full)

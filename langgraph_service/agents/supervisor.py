@@ -1,7 +1,8 @@
 import os
-from schemas.state import AnalysisState
+
 from internal.client.go_backend import GoBackendClient
 from internal.errors import GoBackendError
+from schemas.state import AnalysisState
 
 
 def supervisor_node(state: AnalysisState) -> AnalysisState:
@@ -17,8 +18,15 @@ def supervisor_node(state: AnalysisState) -> AnalysisState:
 
     # Extract or infer incident fields
     alert = state.get("alert") or {}
-    incident_title = state.get("incident_title") or alert.get("name") or "Generated Incident"
-    incident_summary = state.get("incident_summary") or alert.get("annotations", {}).get("description") or alert.get("summary") or "P95 latency exceeded threshold"
+    incident_title = (
+        state.get("incident_title") or alert.get("name") or "Generated Incident"
+    )
+    incident_summary = (
+        state.get("incident_summary")
+        or alert.get("annotations", {}).get("description")
+        or alert.get("summary")
+        or "P95 latency exceeded threshold"
+    )
 
     # Store back to state
     state["incident_title"] = incident_title
@@ -50,11 +58,13 @@ def supervisor_node(state: AnalysisState) -> AnalysisState:
     try:
         affected_services = alert.get("affected_services", [])
         incident_data = {
-            "alert_id": alert.get("alert_id") or alert.get("id") or state.get("alert_id", "unknown"),
+            "alert_id": alert.get("alert_id")
+            or alert.get("id")
+            or state.get("alert_id", "unknown"),
             "title": incident_title,
             "severity": alert.get("severity", "high"),
             "affected_services": affected_services,
-            "opened_by": "supervisor_agent"
+            "opened_by": "supervisor_agent",
         }
         incident_resp = client.create_incident(incident_data)
         state["incident_id"] = incident_resp.get("incident_id")

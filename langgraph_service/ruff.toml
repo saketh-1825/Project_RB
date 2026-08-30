@@ -1,0 +1,6 @@
+[lint]
+ignore = [
+    "G201",    # logging: use of % formatting — style preference
+    "PIE810",  # isinstance tuple — style preference  
+    "RUF015",  # prefer next() — style preference
+]

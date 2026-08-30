@@ -14,7 +14,15 @@
 // ── Config ──────────────────────────────────────────────────────────────────
 
 const API   = '/api/v1';
-const TOKEN = localStorage.getItem('sre_token') || '';   // optional; headers sent
+let TOKEN = localStorage.getItem('sre_token') || '';
+
+if (!TOKEN) {
+  const inputToken = prompt('Please enter your SRE_INTERNAL_TOKEN:');
+  if (inputToken) {
+    TOKEN = inputToken;
+    localStorage.setItem('sre_token', TOKEN);
+  }
+}
 const WS_RECONNECT_DELAY_MS = 3000;
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -35,6 +43,11 @@ function headers() {
 
 async function apiFetch(path, opts = {}) {
   const resp = await fetch(API + path, { headers: headers(), ...opts });
+  if (resp.status === 401) {
+    localStorage.removeItem('sre_token');
+    alert('Unauthorized: Invalid or missing token. Token cleared. Please refresh the page to try again.');
+    throw new Error('401 Unauthorized: Invalid token');
+  }
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`${resp.status} ${path}: ${text.slice(0, 120)}`);

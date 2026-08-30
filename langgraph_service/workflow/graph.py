@@ -1,57 +1,84 @@
-import os
 import logging
-from langgraph.graph import StateGraph, END
+import os
+from collections.abc import Callable
+from contextvars import ContextVar
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
+from agents.correlation_agent import correlation_agent_node
+from agents.evidence_agent import evidence_agent_node
+from agents.human_review_agent import human_review_node
+from agents.report_agent import report_agent_node
+from agents.supervisor import supervisor_node
+
+from internal.client.go_backend import GoBackendClient
+from internal.graph_events import emit_event
+from internal.redis_client import _get_redis, save_analysis_state
 from schemas.state import AnalysisState
 
-from agents.supervisor import supervisor_node
-from agents.evidence_agent import evidence_agent_node
-from agents.correlation_agent import correlation_agent_node
-from agents.report_agent import report_agent_node
-from internal.redis_client import save_analysis_state
-from internal.client.go_backend import GoBackendClient
-
 logger = logging.getLogger(__name__)
-
-def notify_transition(agent_name: str, state: AnalysisState):
-    incident_id = state.get("incident_id")
-    if not incident_id:
-        return
-    
-    base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
-    token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
-    client = GoBackendClient(base_url=base_url, token=token)
-    try:
-        client.patch_incident(incident_id, {"analysis": {"agent_switched": agent_name}})
-    except Exception as e:
-        logger.error(f"Transition notification failed: {e}")
-
-from contextvars import ContextVar
-from internal.graph_events import emit_event
 
 # Task-scoped tracking of executed nodes
 executed_nodes_var: ContextVar[set] = ContextVar("executed_nodes")
 
 TRACKED_NODES = [
     "supervisor",
-    "analysis_coordinator",
+
     "evidence_agent",
     "correlation_agent",
     "human_review",
-    "report_agent"
+    "report_agent",
 ]
+
+# Explicit name -> callable map. This replaces the previous globals()-lookup
+# approach, which made the imports above look "unused" to static analysis
+# (Ruff F401) even though they were load-bearing. Referencing them directly
+# here makes the dependency real and checkable by mypy too.
+NODE_FUNCS: dict[str, Callable[[AnalysisState], AnalysisState]] = {
+    "supervisor_node": supervisor_node,
+
+    "evidence_agent_node": evidence_agent_node,
+    "correlation_agent_node": correlation_agent_node,
+    "report_agent_node": report_agent_node,
+    "human_review_node": human_review_node,
+}
+
+
+def notify_transition(agent_name: str, state: AnalysisState) -> None:
+    incident_id = state.get("incident_id")
+    if not incident_id:
+        return
+
+    base_url = os.environ.get("GO_BACKEND_URL", "http://mock-go-backend:8080/api/v1")
+    token = os.environ.get("SRE_INTERNAL_TOKEN", "mock-token")
+    client = GoBackendClient(base_url=base_url, token=token)
+    try:
+        client.patch_incident(incident_id, {"analysis": {"agent_switched": agent_name}})
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Transition notification failed: {e}")
+
 
 def wrap_node(agent_name: str, node_func_name: str):
     def wrapper(state: AnalysisState):
         notify_transition(agent_name, state)
-        
+
         analysis_id = state.get("analysis_id", "unknown_analysis")
-        
-        # Track executed nodes
+
+        # Track executed nodes. This context var is always set by run_analysis/
+        # resume_analysis before the graph is invoked, so failure here would
+        # indicate a real programming error (calling a node outside that
+        # lifecycle) rather than an expected condition — so we log it instead
+        # of silently continuing.
         try:
             executed_nodes_var.get().add(agent_name)
-        except Exception:
-            pass
-            
+        except LookupError:
+            logger.error(
+                f"executed_nodes_var not set while running node '{agent_name}' "
+                "— node was invoked outside run_analysis()/resume_analysis()."
+            )
+
         # 1. Emit Agent Switched (Running)
         try:
             if agent_name != "supervisor":
@@ -60,23 +87,27 @@ def wrap_node(agent_name: str, node_func_name: str):
                     event_type="analysis.agent_switched",
                     node=agent_name,
                     status="running",
-                    payload={"message": f"Agent {agent_name} started running", "data": {}}
+                    payload={
+                        "message": f"Agent {agent_name} started running",
+                        "data": {},
+                    },
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Event emission failed: {e}")
-            
+
         # Findings before node execution
-        findings_before = list(state.get("findings", [])) if state.get("findings") else []
-        
+        findings_before = (
+            list(state.get("findings", [])) if state.get("findings") else []
+        )
+
         try:
-            # Resolve callable dynamically during execution to support testing/patching
-            node_func = globals()[node_func_name]
+            node_func = NODE_FUNCS[node_func_name]
             result = node_func(state)
-            
+
             # Emit findings added during this node execution
             findings_after = result.get("findings", []) if result else []
             new_findings = [f for f in findings_after if f not in findings_before]
-            
+
             for f in new_findings:
                 try:
                     src = f.get("agent") or agent_name
@@ -84,46 +115,65 @@ def wrap_node(agent_name: str, node_func_name: str):
                         src = "logs"
                     elif src == "rag_agent":
                         src = "rag"
-                        
+
                     f_payload = {
                         "source": src,
-                        "message": f.get("summary") or f.get("title") or "Discovery made"
+                        "message": f.get("summary")
+                        or f.get("title")
+                        or "Discovery made",
                     }
-                    
+
                     if agent_name == "correlation_agent":
                         rc = result.get("root_cause") or {}
-                        f_payload = {
-                            "root_cause": rc.get("type") or rc.get("description") or "unknown",
-                            "confidence": rc.get("confidence") or f.get("confidence") or 0.0
-                        }
                         
+                        # Use the overall correlation confidence so it matches the agent completion event
+                        corr_data = result.get("correlation", {})
+                        if isinstance(corr_data.get("confidence"), dict):
+                            overall_conf = corr_data["confidence"].get("score", 0.0)
+                        else:
+                            overall_conf = rc.get("confidence") or f.get("confidence") or 0.0
+
+                        f_payload = {
+                            "root_cause": rc.get("type")
+                            or rc.get("description")
+                            or "unknown",
+                            "confidence": overall_conf,
+                        }
+
                     emit_event(
                         analysis_id=analysis_id,
                         event_type="analysis.finding",
                         node=agent_name,
                         status="completed",
-                        payload=f_payload
+                        payload=f_payload,
                     )
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     logger.error(f"Finding event emission failed: {ex}")
-                    
+
             # 2. Emit Agent Switched (Completed)
             try:
                 payload_data = {}
                 if agent_name == "correlation_agent" and result:
-                    confidence_score = result.get("correlation", {}).get("confidence", {}).get("score", 0.0)
+                    confidence_score = (
+                        result.get("correlation", {})
+                        .get("confidence", {})
+                        .get("score", 0.0)
+                    )
                     payload_data["confidence"] = confidence_score
-                    
+
                 emit_event(
                     analysis_id=analysis_id,
                     event_type="analysis.agent_switched",
                     node=agent_name,
                     status="completed",
-                    payload={"message": f"Agent {agent_name} completed", "data": payload_data}
+                    payload={
+                        "message": f"Agent {agent_name} completed",
+                        "data": payload_data,
+                    },
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Event emission failed: {e}")
-                
+
             return result
         except Exception as e:
             # 3. Emit Agent Switched (Failed)
@@ -133,22 +183,28 @@ def wrap_node(agent_name: str, node_func_name: str):
                     event_type="analysis.agent_switched",
                     node=agent_name,
                     status="failed",
-                    payload={"message": f"Agent {agent_name} failed", "error": str(e), "data": {}}
+                    payload={
+                        "message": f"Agent {agent_name} failed",
+                        "error": str(e),
+                        "data": {},
+                    },
                 )
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 logger.error(f"Event emission failed: {ex}")
-            raise e
+            # Preserve the original traceback (was `raise e`, which resets it).
+            raise
+
     return wrapper
 
-from internal.analysis_coordinator import detect_and_link_related_analyses
-from agents.human_review_agent import human_review_node
 
 builder = StateGraph(AnalysisState)
 
 builder.add_node("supervisor", wrap_node("supervisor", "supervisor_node"))
-builder.add_node("analysis_coordinator", wrap_node("analysis_coordinator", "detect_and_link_related_analyses"))
+
 builder.add_node("evidence_agent", wrap_node("evidence_agent", "evidence_agent_node"))
-builder.add_node("correlation_agent", wrap_node("correlation_agent", "correlation_agent_node"))
+builder.add_node(
+    "correlation_agent", wrap_node("correlation_agent", "correlation_agent_node")
+)
 builder.add_node("report_agent", wrap_node("report_agent", "report_agent_node"))
 builder.add_node("human_review", wrap_node("human_review", "human_review_node"))
 
@@ -157,20 +213,20 @@ PREVIOUS_NODE = {
     "evidence_agent": "supervisor",
     "rag_agent": "supervisor",
     "correlation_agent": "evidence_agent",
-    "confidence_review": "evidence_agent",   # Resume from confidence_review runs correlation_agent next
-    "report_agent": "correlation_agent"
+    "confidence_review": "evidence_agent",  # Resume from confidence_review runs correlation_agent next
+    "report_agent": "correlation_agent",
 }
 
 builder.set_entry_point("supervisor")
 
-# Route through Analysis Coordinator to detect overlapping alerts before evidence collection
-builder.add_edge("supervisor", "analysis_coordinator")
-builder.add_edge("analysis_coordinator", "evidence_agent")
+builder.add_edge("supervisor", "evidence_agent")
+
 
 def route_after_evidence(state: AnalysisState):
     if state.get("status") == "awaiting_human":
         return END
     return "correlation_agent"
+
 
 def confidence_router(state: AnalysisState):
     """
@@ -183,25 +239,25 @@ def confidence_router(state: AnalysisState):
         return "report_agent"
     return "human_review"
 
+
 builder.add_conditional_edges("evidence_agent", route_after_evidence)
 builder.add_conditional_edges("correlation_agent", confidence_router)
 builder.add_edge("report_agent", END)
 builder.add_edge("human_review", END)
 
 
-from langgraph.checkpoint.memory import MemorySaver
-
 memory = MemorySaver()
 graph_with_checkpoint = builder.compile(checkpointer=memory)
 graph_no_checkpoint = builder.compile()
 
+
 def get_graph():
     return graph_no_checkpoint
 
-def handle_run_completion(analysis_id: str, result: dict, executed: set):
+
+def handle_run_completion(analysis_id: str, result: dict, executed: set) -> None:
     import json
-    from internal.redis_client import _get_redis
-    
+
     # 1. Determine and emit skipped nodes
     try:
         r = _get_redis()
@@ -210,21 +266,29 @@ def handle_run_completion(analysis_id: str, result: dict, executed: set):
         for ev_str in existing_events:
             try:
                 ev = json.loads(ev_str)
-                if ev.get("event_type") == "analysis.agent_switched" and ev.get("status") in ["completed", "failed", "running"]:
+                if ev.get("event_type") == "analysis.agent_switched" and ev.get(
+                    "status"
+                ) in ["completed", "failed", "running"]:
                     executed_previously.add(ev.get("node"))
-            except Exception:
-                pass
-                
-        skipped_nodes = [n for n in TRACKED_NODES if n not in executed and n not in executed_previously]
+            except (json.JSONDecodeError, TypeError) as parse_err:
+                logger.warning(
+                    f"Skipping malformed event record for {analysis_id}: {parse_err}"
+                )
+
+        skipped_nodes = [
+            n
+            for n in TRACKED_NODES
+            if n not in executed and n not in executed_previously
+        ]
         for node in skipped_nodes:
             emit_event(
                 analysis_id=analysis_id,
                 event_type="analysis.agent_switched",
                 node=node,
                 status="skipped",
-                payload={"message": f"Agent {node} was skipped", "data": {}}
+                payload={"message": f"Agent {node} was skipped", "data": {}},
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to identify/emit skipped nodes: {e}")
 
     # 2. Emit final lifecycle events
@@ -236,7 +300,7 @@ def handle_run_completion(analysis_id: str, result: dict, executed: set):
                 event_type="analysis.completed",
                 node="report_agent",
                 status="completed",
-                payload={"message": "Analysis completed successfully", "data": {}}
+                payload={"message": "Analysis completed successfully", "data": {"report": result.get("report")}},
             )
         elif status == "failed":
             emit_event(
@@ -244,18 +308,23 @@ def handle_run_completion(analysis_id: str, result: dict, executed: set):
                 event_type="analysis.failed",
                 node="report_agent",
                 status="failed",
-                payload={"message": "Analysis failed", "error": "Max resumptions exceeded", "data": {}}
+                payload={
+                    "message": "Analysis failed",
+                    "error": "Max resumptions exceeded",
+                    "data": {},
+                },
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to emit final lifecycle event: {e}")
+
 
 def run_analysis(state: dict) -> dict:
     """
     Invokes the graph on initial input and persists the final/paused state in Redis.
     """
     analysis_id = state.get("analysis_id", "unknown_analysis")
-    config = {"configurable": {"thread_id": analysis_id}}
-    
+    config: RunnableConfig = {"configurable": {"thread_id": analysis_id}}
+
     token = executed_nodes_var.set(set())
     try:
         emit_event(
@@ -263,17 +332,17 @@ def run_analysis(state: dict) -> dict:
             event_type="analysis.started",
             node="supervisor",
             status="running",
-            payload={"message": "Analysis started", "data": {}}
+            payload={"message": "Analysis started", "data": {}},
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Event emission failed: {e}")
-        
+
     try:
         result = graph_with_checkpoint.invoke(state, config=config)
-        
+
         executed = executed_nodes_var.get()
         handle_run_completion(analysis_id, result, executed)
-        
+
         save_analysis_state(analysis_id, result)
         return result
     except Exception as e:
@@ -283,13 +352,20 @@ def run_analysis(state: dict) -> dict:
                 event_type="analysis.failed",
                 node="supervisor",
                 status="failed",
-                payload={"message": "Analysis run crashed", "error": str(e), "data": {}}
+                payload={
+                    "message": "Analysis run crashed",
+                    "error": str(e),
+                    "data": {},
+                },
             )
         except Exception:
-            pass
-        raise e
+            logger.error(
+                "Failed to emit crash event on top of the original crash", exc_info=True
+            )
+        raise
     finally:
         executed_nodes_var.reset(token)
+
 
 def resume_analysis(state: dict) -> dict:
     """
@@ -297,7 +373,7 @@ def resume_analysis(state: dict) -> dict:
     """
     state["resume_count"] = state.get("resume_count", 0) + 1
     analysis_id = state.get("analysis_id", "unknown_analysis")
-    config = {"configurable": {"thread_id": analysis_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": analysis_id}}
 
     token = executed_nodes_var.set(set())
     try:
@@ -306,9 +382,9 @@ def resume_analysis(state: dict) -> dict:
             event_type="analysis.started",
             node="supervisor",
             status="running",
-            payload={"message": "Analysis resumed", "data": {}}
+            payload={"message": "Analysis resumed", "data": {}},
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Event emission failed: {e}")
 
     try:
@@ -318,18 +394,22 @@ def resume_analysis(state: dict) -> dict:
             state["waiting_at"] = None
             state["interrupt_type"] = None
             state["interrupt_question"] = None
-            
+
             try:
                 emit_event(
                     analysis_id=analysis_id,
                     event_type="analysis.failed",
                     node="report_agent",
                     status="failed",
-                    payload={"message": "Analysis failed: Max resumptions exceeded", "error": "Exceeded limit of 2 resumptions", "data": {}}
+                    payload={
+                        "message": "Analysis failed: Max resumptions exceeded",
+                        "error": "Exceeded limit of 2 resumptions",
+                        "data": {},
+                    },
                 )
-            except Exception:
-                pass
-                
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Failed to emit max-resumption failure event: {e}")
+
             save_analysis_state(analysis_id, state)
             return state
 
@@ -360,10 +440,16 @@ def resume_analysis(state: dict) -> dict:
                 event_type="analysis.failed",
                 node="supervisor",
                 status="failed",
-                payload={"message": "Analysis resume crashed", "error": str(e), "data": {}}
+                payload={
+                    "message": "Analysis resume crashed",
+                    "error": str(e),
+                    "data": {},
+                },
             )
         except Exception:
-            pass
-        raise e
+            logger.error(
+                "Failed to emit crash event on top of the original crash", exc_info=True
+            )
+        raise
     finally:
         executed_nodes_var.reset(token)

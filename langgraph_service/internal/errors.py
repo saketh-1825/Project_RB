@@ -3,7 +3,7 @@ class GoBackendError(Exception):
         self,
         status_code: int,
         message: str,
-        original_exception: Exception | None = None
+        original_exception: Exception | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -18,7 +18,7 @@ class BackendTimeoutError(GoBackendError):
         self,
         status_code: int,
         message: str,
-        original_exception: Exception | None = None
+        original_exception: Exception | None = None,
     ):
         super().__init__(status_code, message, original_exception)
         self.error_category = "timeout"
@@ -29,7 +29,7 @@ class BackendUnavailableError(GoBackendError):
         self,
         status_code: int,
         message: str,
-        original_exception: Exception | None = None
+        original_exception: Exception | None = None,
     ):
         super().__init__(status_code, message, original_exception)
         if status_code == 500:
@@ -43,7 +43,7 @@ class BackendNotFoundError(GoBackendError):
         self,
         status_code: int,
         message: str,
-        original_exception: Exception | None = None
+        original_exception: Exception | None = None,
     ):
         super().__init__(status_code, message, original_exception)
         self.error_category = "not_found"

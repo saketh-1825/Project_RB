@@ -1,20 +1,24 @@
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any
 
-from schemas.state import AnalysisState
+from agents.helpers import build_degraded_finding
 from internal.client.go_backend import GoBackendClient
 from internal.errors import GoBackendError
-from agents.helpers import build_degraded_finding
+from schemas.state import AnalysisState
 
 
-def extract_log_ids(logs: List[Dict[str, Any]]) -> List[str]:
+def extract_log_ids(logs: list[dict[str, Any]]) -> list[str]:
     if not isinstance(logs, list):
         return []
-    return [str(log["id"]) for log in logs if isinstance(log, dict) and "id" in log and log["id"] is not None]
+    return [
+        str(log["id"])
+        for log in logs
+        if isinstance(log, dict) and "id" in log and log["id"] is not None
+    ]
 
 
-def extract_trace_ids(logs: List[Dict[str, Any]]) -> List[str]:
+def extract_trace_ids(logs: list[dict[str, Any]]) -> list[str]:
     if not isinstance(logs, list):
         return []
     trace_ids = set()
@@ -26,7 +30,7 @@ def extract_trace_ids(logs: List[Dict[str, Any]]) -> List[str]:
     return list(trace_ids)
 
 
-def build_finding(log_ids: List[str], trace_ids: List[str]) -> Dict[str, Any]:
+def build_finding(log_ids: list[str], trace_ids: list[str]) -> dict[str, Any]:
     return {
         "agent": "log_query_agent",
         "type": "log_anomaly",
@@ -35,9 +39,9 @@ def build_finding(log_ids: List[str], trace_ids: List[str]) -> Dict[str, Any]:
         "summary": "Large number of ERROR logs found",
         "evidence": {
             "log_ids": log_ids if isinstance(log_ids, list) else [],
-            "trace_ids": trace_ids if isinstance(trace_ids, list) else []
+            "trace_ids": trace_ids if isinstance(trace_ids, list) else [],
         },
-        "confidence": 0.9
+        "confidence": 0.9,
     }
 
 
@@ -57,8 +61,9 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
     alert = state.get("alert") or {}
     affected_services = alert.get("affected_services", [])
     fired_at_str = alert.get("fired_at")
-    
+
     from datetime import timezone
+
     if fired_at_str:
         clean_time_str = fired_at_str.replace("Z", "+00:00")
         try:
@@ -70,7 +75,12 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
     else:
         fired_at = datetime.now(timezone.utc)
 
-    from_time_str = (fired_at - timedelta(minutes=10)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    from_time_str = (
+        (fired_at - timedelta(minutes=10))
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     to_time_str = fired_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # 1. Fetch logs with degradation fallback
@@ -79,7 +89,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
             from_time=from_time_str,
             to_time=to_time_str,
             services=affected_services,
-            levels=["ERROR", "FATAL"]
+            levels=["ERROR", "FATAL"],
         )
         logs = logs_resp.get("logs") if logs_resp else []
         if not isinstance(logs, list):
@@ -90,7 +100,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
             agent="log_query_agent",
             status_code=e.status_code,
             message="Log retrieval failed",
-            error_category=category
+            error_category=category,
         )
         if "findings" not in state or not isinstance(state["findings"], list):
             state["findings"] = []
@@ -100,9 +110,11 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
             "source": "log_query_agent",
             "event_type": "degraded",
             "message": "Log query service degraded",
-            "details": finding
+            "details": finding,
         }
-        if "incident_events" not in state or not isinstance(state["incident_events"], list):
+        if "incident_events" not in state or not isinstance(
+            state["incident_events"], list
+        ):
             state["incident_events"] = []
         state["incident_events"].append(log_event)
 
@@ -111,18 +123,16 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
 
     try:
         client.get_log_anomalies(
-            from_time=from_time_str,
-            to_time=to_time_str,
-            services=affected_services
+            from_time=from_time_str, to_time=to_time_str, services=affected_services
         )
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     trace_ids = extract_trace_ids(logs)
     for trace_id in trace_ids:
         try:
             client.get_trace(trace_id)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     log_ids = extract_log_ids(logs)
@@ -130,7 +140,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
 
     if "findings" not in state or not isinstance(state["findings"], list):
         state["findings"] = []
-    
+
     state["findings"].append(finding)
 
     if "incident_events" not in state or not isinstance(state["incident_events"], list):
@@ -140,7 +150,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
         "source": "log_query_agent",
         "event_type": "log_anomaly",
         "message": "Error spike detected in logs",
-        "details": finding
+        "details": finding,
     }
     state["incident_events"].append(log_event)
 
@@ -148,7 +158,7 @@ def log_query_agent_node(state: AnalysisState) -> AnalysisState:
     if incident_id:
         try:
             client.post_finding(incident_id, finding)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     state["current_agent"] = "rag_agent"
